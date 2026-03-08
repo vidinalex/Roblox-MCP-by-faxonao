@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.rbxmcp/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.tmp
+*.temp
+*.tsbuildinfo
