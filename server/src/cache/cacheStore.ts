@@ -61,6 +61,8 @@ function cloneUiNode(node: UiNodeSnapshot): UiNodeSnapshot {
     version: node.version,
     updatedAt: node.updatedAt,
     props: { ...node.props },
+    tags: [...node.tags],
+    attributes: { ...node.attributes },
     unsupportedProperties: [...node.unsupportedProperties],
     children: node.children.map((child) => cloneUiNode(child))
   };
@@ -75,6 +77,8 @@ function sanitizeUiNode(node: UiNodeSnapshot): UiNodeSnapshot {
     version: String(node.version ?? sourceHash(JSON.stringify(node.props ?? {}))),
     updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : nowIso(),
     props: typeof node.props === "object" && node.props ? { ...node.props } : {},
+    tags: Array.isArray(node.tags) ? node.tags.map((entry) => String(entry)) : [],
+    attributes: typeof node.attributes === "object" && node.attributes ? { ...node.attributes } : {},
     unsupportedProperties: Array.isArray(node.unsupportedProperties)
       ? node.unsupportedProperties.map((entry) => String(entry))
       : [],
@@ -199,7 +203,9 @@ export class CacheStore {
           updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso(),
           sourceFile: record.sourceFile,
           draftAware: record.draftAware === true,
-          readChannel: normalizeReadChannel(record.readChannel)
+          readChannel: normalizeReadChannel(record.readChannel),
+          tags: Array.isArray(record.tags) ? record.tags.map((entry) => String(entry)) : [],
+          attributes: typeof record.attributes === "object" && record.attributes ? { ...record.attributes } : {}
         };
       }
 
@@ -439,7 +445,9 @@ export class CacheStore {
       updatedAt,
       sourceFile,
       draftAware: input.draftAware,
-      readChannel: input.readChannel
+      readChannel: input.readChannel,
+      tags: Array.isArray(input.tags) ? input.tags.map((entry) => String(entry)) : [],
+      attributes: typeof input.attributes === "object" && input.attributes ? { ...input.attributes } : {}
     };
     active.scripts[key] = record;
     active.lastReadChannel = record.readChannel;
@@ -454,7 +462,9 @@ export class CacheStore {
       hash: record.hash,
       updatedAt: record.updatedAt,
       draftAware: record.draftAware,
-      readChannel: record.readChannel
+      readChannel: record.readChannel,
+      tags: [...record.tags],
+      attributes: { ...record.attributes }
     };
   }
 
@@ -506,7 +516,11 @@ export class CacheStore {
         source: script.source,
         hash: script.hash,
         draftAware: script.draftAware ?? false,
-        readChannel: script.readChannel ?? DEFAULT_READ_CHANNEL
+        readChannel: script.readChannel ?? DEFAULT_READ_CHANNEL,
+        tags: Array.isArray((script as ScriptSnapshot).tags) ? [...(script as ScriptSnapshot).tags] : [],
+        attributes: typeof (script as ScriptSnapshot).attributes === "object" && (script as ScriptSnapshot).attributes
+          ? { ...(script as ScriptSnapshot).attributes }
+          : {}
       });
     }
 
@@ -545,7 +559,11 @@ export class CacheStore {
         source: script.source,
         hash: script.hash,
         draftAware: script.draftAware ?? false,
-        readChannel: script.readChannel ?? DEFAULT_READ_CHANNEL
+        readChannel: script.readChannel ?? DEFAULT_READ_CHANNEL,
+        tags: Array.isArray((script as ScriptSnapshot).tags) ? [...(script as ScriptSnapshot).tags] : [],
+        attributes: typeof (script as ScriptSnapshot).attributes === "object" && (script as ScriptSnapshot).attributes
+          ? { ...(script as ScriptSnapshot).attributes }
+          : {}
       });
       changed.push({ path: updated.path, updatedAt: updated.updatedAt });
     }
@@ -589,7 +607,11 @@ export class CacheStore {
       source: next.source,
       hash: next.hash,
       draftAware: next.draftAware ?? false,
-      readChannel: next.readChannel ?? DEFAULT_READ_CHANNEL
+      readChannel: next.readChannel ?? DEFAULT_READ_CHANNEL,
+      tags: Array.isArray((next as ScriptSnapshot).tags) ? [...(next as ScriptSnapshot).tags] : [],
+      attributes: typeof (next as ScriptSnapshot).attributes === "object" && (next as ScriptSnapshot).attributes
+        ? { ...(next as ScriptSnapshot).attributes }
+        : {}
     });
     const newKey = pathKey(next.path);
     if (oldRecord && oldKey !== newKey) {
@@ -654,7 +676,9 @@ export class CacheStore {
       hash: record.hash,
       updatedAt: record.updatedAt,
       draftAware: record.draftAware,
-      readChannel: record.readChannel
+      readChannel: record.readChannel,
+      tags: [...record.tags],
+      attributes: { ...record.attributes }
     };
   }
 
@@ -680,7 +704,9 @@ export class CacheStore {
       hash: match.hash,
       updatedAt: match.updatedAt,
       draftAware: record?.draftAware ?? false,
-      readChannel: record?.readChannel ?? DEFAULT_READ_CHANNEL
+      readChannel: record?.readChannel ?? DEFAULT_READ_CHANNEL,
+      tags: [...(record?.tags ?? [])],
+      attributes: { ...(record?.attributes ?? {}) }
     };
   }
 
@@ -762,7 +788,9 @@ export class CacheStore {
         hash: record.hash,
         updatedAt: record.updatedAt,
         draftAware: record.draftAware,
-        readChannel: record.readChannel
+        readChannel: record.readChannel,
+        tags: [...record.tags],
+        attributes: { ...record.attributes }
       });
       if (out.length >= limit) {
         break;
@@ -872,7 +900,9 @@ export class CacheStore {
         hash: record.hash,
         updatedAt: record.updatedAt,
         draftAware: record.draftAware,
-        readChannel: record.readChannel
+        readChannel: record.readChannel,
+        tags: [...record.tags],
+        attributes: { ...record.attributes }
       });
     }
     return out;

@@ -1,0 +1,1 @@
+{"path":"ServerScriptService/Core/McpFormatSmoke_20260319_1754","className":"ModuleScript","source":"local M = {}\n\nfunction M.hello()\n    return \"ok\"\nend\n\nreturn M"}

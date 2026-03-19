@@ -1,0 +1,8 @@
+﻿{
+  "paths": [
+    "ServerScriptService/Core/AudioClientRuntime",
+    "ReplicatedFirst/AudioHooks_Client"
+  ],
+  "includeSource": true,
+  "forceRefresh": true
+}

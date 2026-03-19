@@ -7,6 +7,9 @@ import { normalizePath, pathKey, scriptNameFromPath, serviceFromPath } from "../
 const INDEX_VERSION = 1;
 const INDEX_FILE = "retrieval-index.v1.json";
 const MAX_SEARCH_MATCHES_PER_SCRIPT = 5;
+const MAX_INDEXED_SOURCE_CHARS = 64 * 1024;
+const MAX_INDEX_TOKEN_CHARS = 128;
+const TRUNCATED_SOURCE_MARKER = "\n-- RBXMCP: source truncated for retrieval index --\n";
 
 export type SymbolKind = "function" | "local" | "table" | "method" | "module";
 
@@ -174,7 +177,18 @@ interface RemoteInternal {
 
 function tokenize(input: string): string[] {
   const matches = input.toLowerCase().match(/[\p{L}\p{N}_]+/gu);
-  return matches ? matches.filter((part) => part.length > 0) : [];
+  return matches ? matches.filter((part) => part.length > 0 && part.length <= MAX_INDEX_TOKEN_CHARS) : [];
+}
+
+function compactSourceForIndex(sourceInput: string): string {
+  const source = String(sourceInput ?? "");
+  if (source.length <= MAX_INDEXED_SOURCE_CHARS) {
+    return source;
+  }
+  const remaining = Math.max(0, MAX_INDEXED_SOURCE_CHARS - TRUNCATED_SOURCE_MARKER.length);
+  const headLength = Math.max(0, Math.floor(remaining * 0.75));
+  const tailLength = Math.max(0, remaining - headLength);
+  return `${source.slice(0, headLength)}${TRUNCATED_SOURCE_MARKER}${source.slice(Math.max(0, source.length - tailLength))}`;
 }
 
 function clampLimit(input: number | undefined, fallback: number, max: number): number {
@@ -538,7 +552,7 @@ export class RetrievalIndex {
         }
         continue;
       }
-      this.scripts.set(key, { ...snapshot, key });
+      this.scripts.set(key, { ...snapshot, source: compactSourceForIndex(snapshot.source), key });
       changed = true;
     }
     if (changed) {
@@ -1176,7 +1190,9 @@ export class RetrievalIndex {
           hash: String(record.hash ?? ""),
           updatedAt: String(record.updatedAt ?? new Date().toISOString()),
           draftAware: record.draftAware === true,
-          readChannel: record.readChannel === "editor" ? "editor" : "unknown"
+          readChannel: record.readChannel === "editor" ? "editor" : "unknown",
+          tags: Array.isArray(record.tags) ? record.tags.map((entry) => String(entry)) : [],
+          attributes: typeof record.attributes === "object" && record.attributes ? { ...record.attributes } : {}
         });
       }
       this.rebuildFromSnapshots(scripts);
@@ -1203,7 +1219,9 @@ export class RetrievalIndex {
         hash: script.hash,
         updatedAt: script.updatedAt,
         draftAware: script.draftAware,
-        readChannel: script.readChannel
+        readChannel: script.readChannel,
+        tags: [...script.tags],
+        attributes: { ...script.attributes }
       }))
     };
     await mkdir(dirname(filePath), { recursive: true });
@@ -1223,7 +1241,7 @@ export class RetrievalIndex {
     this.clearInMemory();
     for (const script of scripts) {
       const key = pathKey(script.path);
-      this.scripts.set(key, { ...script, key });
+      this.scripts.set(key, { ...script, source: compactSourceForIndex(script.source), key });
     }
     this.rebuildSecondaryIndexes();
   }
@@ -1725,4 +1743,3 @@ export class RetrievalIndex {
     };
   }
 }
-

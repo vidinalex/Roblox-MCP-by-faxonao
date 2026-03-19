@@ -12,6 +12,8 @@ export interface ScriptSnapshot {
   updatedAt: string;
   draftAware: boolean;
   readChannel: ScriptReadChannel;
+  tags: string[];
+  attributes: Record<string, UiValue>;
 }
 
 export interface ScriptIndexRecord {
@@ -25,6 +27,8 @@ export interface ScriptIndexRecord {
   sourceFile: string;
   draftAware: boolean;
   readChannel: ScriptReadChannel;
+  tags: string[];
+  attributes: Record<string, UiValue>;
 }
 
 export type UiScalarValue = string | number | boolean;
@@ -52,6 +56,13 @@ export interface UiVector2Value {
   type: "Vector2";
   x: number;
   y: number;
+}
+
+export interface UiVector3Value {
+  type: "Vector3";
+  x: number;
+  y: number;
+  z: number;
 }
 
 export interface UiEnumValue {
@@ -95,10 +106,18 @@ export type UiValue =
   | UiUDimValue
   | UiUDim2Value
   | UiVector2Value
+  | UiVector3Value
   | UiEnumValue
   | UiColorSequenceValue
   | UiNumberSequenceValue
   | UiRectValue;
+
+export interface InstanceMetadataPatch {
+  addTags?: string[];
+  removeTags?: string[];
+  attributes?: Record<string, UiValue>;
+  clearAttributes?: string[];
+}
 
 export interface UiNodeSnapshot {
   path: string[];
@@ -108,6 +127,8 @@ export interface UiNodeSnapshot {
   version: string;
   updatedAt: string;
   props: Record<string, UiValue>;
+  tags: string[];
+  attributes: Record<string, UiValue>;
   unsupportedProperties: string[];
   children: UiNodeSnapshot[];
 }
@@ -120,6 +141,16 @@ export interface UiUpdatePropsOperation {
   clearProps?: string[];
 }
 
+export interface UiUpdateMetadataOperation {
+  op: "update_metadata";
+  path?: string[];
+  pathRef?: string;
+  addTags?: string[];
+  removeTags?: string[];
+  attributes?: Record<string, UiValue>;
+  clearAttributes?: string[];
+}
+
 export interface UiCreateNodeOperation {
   op: "create_node";
   parentPath?: string[];
@@ -127,6 +158,8 @@ export interface UiCreateNodeOperation {
   className: string;
   name: string;
   props?: Record<string, UiValue>;
+  tags?: string[];
+  attributes?: Record<string, UiValue>;
   index?: number;
   id?: string;
 }
@@ -148,6 +181,7 @@ export interface UiMoveNodeOperation {
 
 export type UiMutationOp =
   | UiUpdatePropsOperation
+  | UiUpdateMetadataOperation
   | UiCreateNodeOperation
   | UiDeleteNodeOperation
   | UiMoveNodeOperation;
@@ -204,8 +238,11 @@ export interface LogEntryRecord {
   time: string;
   level: "info" | "warn" | "error";
   message: string;
+  cursor?: string;
   source?: string | null;
   playSessionId?: string | null;
+  requestId?: string | null;
+  commandId?: string | null;
 }
 
 export type ChangeJournalItemKind = "script" | "ui_root";
@@ -265,6 +302,7 @@ export interface BridgeCommand {
     | "snapshot_script_by_path"
     | "snapshot_scripts_by_paths"
     | "set_script_source_if_hash"
+    | "set_script_metadata_if_hash"
     | "upsert_script"
     | "delete_script_if_hash"
     | "move_script_if_hash"
@@ -275,6 +313,7 @@ export interface BridgeCommand {
   payload: Record<string, unknown>;
   createdAt: string;
   timeoutMs: number;
+  requestId?: string;
 }
 
 export interface CommandResult {
@@ -286,4 +325,3 @@ export interface CommandResult {
     details?: unknown;
   };
 }
-

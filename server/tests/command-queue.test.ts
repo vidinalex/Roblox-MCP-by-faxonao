@@ -52,4 +52,11 @@ describe("CommandQueue", () => {
     await vi.advanceTimersByTimeAsync(1);
     await expect(pending).rejects.toThrow(/timed out/);
   });
+
+  it("returns immediately when waitMs is zero and there are no queued commands", async () => {
+    const queue = new CommandQueue();
+    queue.bindSession("session-1");
+
+    await expect(queue.poll("session-1", 0, 1)).resolves.toEqual([]);
+  });
 });

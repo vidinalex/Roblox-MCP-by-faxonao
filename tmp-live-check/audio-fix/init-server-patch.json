@@ -1,0 +1,17 @@
+﻿[
+  {
+    "op": "replace_text",
+    "oldText": "ensureTaggedLibrary(\"EggConfig\")\nensureForceReplicate(\"EggConfig\")\nensureTaggedLibrary(\"EggCarryService\")",
+    "newText": "ensureTaggedLibrary(\"EggConfig\")\nensureForceReplicate(\"EggConfig\")\nensureTaggedLibrary(\"EggCarryService\")\nensureTaggedLibrary(\"AudioConfig\")\nensureForceReplicate(\"AudioConfig\")\nensureTaggedLibrary(\"AudioService\")\nensureForceReplicate(\"AudioService\")\nensureTaggedLibrary(\"AudioClientRuntime\")\nensureForceReplicate(\"AudioClientRuntime\")\nensureTaggedLibrary(\"AudioServerRuntime\")"
+  },
+  {
+    "op": "replace_text",
+    "oldText": "local TimeRewardsService = Aether:LoadLibrary(\"TimeRewardsService\")",
+    "newText": "local TimeRewardsService = Aether:LoadLibrary(\"TimeRewardsService\")\nlocal AudioService = Aether:LoadLibrary(\"AudioService\")"
+  },
+  {
+    "op": "replace_text",
+    "oldText": "(function()\n\tif BootstrapService then\n\t\t(BootstrapService :: any):Init()\n\telse\n\t\twarn('[BootstrapService] BootstrapService is nil (missing AE_Library tag or not present).')\n\tend\nend)();",
+    "newText": "if AudioService then\n\t(AudioService :: any):Init()\nelse\n\twarn('[Audio] AudioService is nil (missing AE_Library tag or not present).')\nend\n\n(function()\n\tif BootstrapService then\n\t\t(BootstrapService :: any):Init()\n\telse\n\t\twarn('[BootstrapService] BootstrapService is nil (missing AE_Library tag or not present).')\n\tend\nend)();"
+  }
+]

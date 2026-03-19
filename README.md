@@ -87,6 +87,35 @@ npm.cmd run build
 npm.cmd test
 ```
 
+## Windows Large Payloads
+Use file-based helpers instead of inline 1000+ line payloads in PowerShell.
+
+Examples:
+```powershell
+powershell -File .\tools\rbxmcp-create-script.ps1 `
+  -Path "ReplicatedStorage/Foo/BigModule" `
+  -ClassName ModuleScript `
+  -SourceFile C:\temp\BigModule.lua `
+  -Port 5111
+```
+
+```powershell
+powershell -File .\tools\rbxmcp-update-script.ps1 `
+  -Path "ReplicatedStorage/Foo/BigModule" `
+  -ExpectedHash "abcd1234" `
+  -SourceFile C:\temp\BigModule.lua `
+  -Port 5111
+```
+
+```powershell
+powershell -File .\tools\rbxmcp-post.ps1 `
+  -Endpoint /v1/agent/apply_script_patch `
+  -JsonFile C:\temp\payload.json `
+  -Port 5111
+```
+
+More examples: [`docs/windows-large-payloads.md`](C:\Users\vidin\Roblox-MCP-by-faxonao\docs\windows-large-payloads.md)
+
 ## Studio Setup
 1. Create/install a plugin and paste [`plugin/Plugin.main.lua`](/C:/Users/vidin/Desktop/RBXMCP/plugin/Plugin.main.lua).
 2. Enable HTTP requests in Roblox Studio settings.
@@ -151,4 +180,3 @@ npm.cmd test
 - `find_ui_bindings` returns heuristic hints with confidence, not guaranteed controller truth.
 - Remote graph is static/heuristic v2. When the exact path cannot be proven, `inferredPath` stays `null`.
 - `apply_ui_batch` supports intra-batch refs (`id`, `pathRef`, `parentRef`, `newParentRef`) so large UI payloads do not need to repeat absolute paths.
-

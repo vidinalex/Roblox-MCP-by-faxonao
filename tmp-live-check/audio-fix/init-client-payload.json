@@ -1,0 +1,16 @@
+﻿{
+  "path": "ServerScriptService/Init_Client",
+  "expectedHash": "a07326c0",
+  "patch": [
+    {
+      "op": "replace_text",
+      "oldText": "local BootstrapClient = Aether:LoadLibrary(\"BootstrapClient\")\nlocal UIService = Aether:LoadLibrary(\"UIService\")",
+      "newText": "local BootstrapClient = Aether:LoadLibrary(\"BootstrapClient\")\nlocal UIService = Aether:LoadLibrary(\"UIService\")\nlocal AudioService = Aether:LoadLibrary(\"AudioService\")"
+    },
+    {
+      "op": "replace_text",
+      "oldText": "(UIService :: any):Init();\n(UIService :: any):Open(\"HUDStatus\");\n(UIService :: any):Open(\"HUD\");",
+      "newText": "if AudioService then\n\t(AudioService :: any):Init()\nelse\n\twarn('[Audio] AudioService is nil (missing AE_Library/replication tags).')\nend\n\n(UIService :: any):Init();\n(UIService :: any):Open(\"HUDStatus\");\n(UIService :: any):Open(\"HUD\");"
+    }
+  ]
+}

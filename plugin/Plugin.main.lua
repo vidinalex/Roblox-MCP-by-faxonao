@@ -1,4 +1,5 @@
 local HttpService = game:GetService("HttpService")
+local CollectionService = game:GetService("CollectionService")
 local LogService = game:GetService("LogService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -7,16 +8,18 @@ pcall(function()
 	ScriptEditorService = game:GetService("ScriptEditorService")
 end)
 
-local PLUGIN_VERSION = "0.2.0"
-local LEGACY_BRIDGE_URL = "http://127.0.0.1:5000/v1/studio"
-local DEFAULT_BRIDGE_URL = "http://127.0.0.1:5100/v1/studio"
-local POLL_WAIT_MS = 25000
-local LOG_LIMIT = 300
-local LOG_RENDER_THROTTLE = 0.08
-local PROJECT_PROFILES_KEY = "rbxmcp_project_profiles_v1"
-local PRODUCT_NAME = "Aether MCP Bridge"
-local PRODUCT_SUBTITLE = "made by faxonao"
-local PRODUCT_ICON = "rbxassetid://96280057659640"
+local CONFIG = {
+	PLUGIN_VERSION = "0.2.0",
+	LEGACY_BRIDGE_URL = "http://127.0.0.1:5000/v1/studio",
+	DEFAULT_BRIDGE_URL = "http://127.0.0.1:5100/v1/studio",
+	POLL_WAIT_MS = 100,
+	LOG_LIMIT = 300,
+	LOG_RENDER_THROTTLE = 0.08,
+	PROJECT_PROFILES_KEY = "rbxmcp_project_profiles_v1",
+	PRODUCT_NAME = "Aether MCP Bridge",
+	PRODUCT_SUBTITLE = "made by faxonao",
+	PRODUCT_ICON = "rbxassetid://96280057659640",
+}
 
 local COLORS = {
 	primary = Color3.fromRGB(113, 70, 255),
@@ -37,8 +40,8 @@ local COLORS = {
 	border = Color3.fromRGB(91, 72, 146),
 }
 
-local toolbar = plugin:CreateToolbar(PRODUCT_NAME)
-local openButton = toolbar:CreateButton(PRODUCT_NAME, "Open " .. PRODUCT_NAME .. " panel", PRODUCT_ICON)
+local toolbar = plugin:CreateToolbar(CONFIG.PRODUCT_NAME)
+local openButton = toolbar:CreateButton(CONFIG.PRODUCT_NAME, "Open " .. CONFIG.PRODUCT_NAME .. " panel", CONFIG.PRODUCT_ICON)
 
 local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Left,
@@ -50,7 +53,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 	260
 )
 local widget = plugin:CreateDockWidgetPluginGui("RBXMCPDock", widgetInfo)
-widget.Title = PRODUCT_NAME
+widget.Title = CONFIG.PRODUCT_NAME
 
 local container = Instance.new("Frame")
 container.Size = UDim2.fromScale(1, 1)
@@ -224,7 +227,7 @@ local heroIcon = Instance.new("ImageLabel")
 heroIcon.Size = UDim2.new(0, 68, 0, 68)
 heroIcon.Position = UDim2.new(0, 14, 0, 22)
 heroIcon.BackgroundTransparency = 1
-heroIcon.Image = PRODUCT_ICON
+heroIcon.Image = CONFIG.PRODUCT_ICON
 heroIcon.ScaleType = Enum.ScaleType.Fit
 heroIcon.Parent = headerCard
 
@@ -253,7 +256,7 @@ title.TextColor3 = COLORS.textMain
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.FredokaOne
 title.TextSize = 20
-title.Text = PRODUCT_NAME
+title.Text = CONFIG.PRODUCT_NAME
 title.Parent = headerCard
 
 local creditLabel = Instance.new("TextLabel")
@@ -264,7 +267,7 @@ creditLabel.TextColor3 = COLORS.textMuted
 creditLabel.TextXAlignment = Enum.TextXAlignment.Left
 creditLabel.Font = Enum.Font.GothamMedium
 creditLabel.TextSize = 10
-creditLabel.Text = PRODUCT_SUBTITLE
+creditLabel.Text = CONFIG.PRODUCT_SUBTITLE
 creditLabel.Parent = headerCard
 
 local statusBadge = Instance.new("TextLabel")
@@ -802,7 +805,7 @@ local state = {
 	bridgePort = plugin:GetSetting("rbxmcp_bridge_port"),
 	bridgeHost = plugin:GetSetting("rbxmcp_bridge_host"),
 	bridgeScheme = plugin:GetSetting("rbxmcp_bridge_scheme"),
-	bridgeBaseUrl = plugin:GetSetting("rbxmcp_bridge_url") or DEFAULT_BRIDGE_URL,
+	bridgeBaseUrl = plugin:GetSetting("rbxmcp_bridge_url") or CONFIG.DEFAULT_BRIDGE_URL,
 	playState = "stopped",
 	playMode = nil,
 	playSessionId = nil,
@@ -839,11 +842,11 @@ end
 local function parseBridgeUrl(raw)
 	local value = trim(raw)
 	if value == "" then
-		value = DEFAULT_BRIDGE_URL
+		value = CONFIG.DEFAULT_BRIDGE_URL
 	end
 	value = value:gsub("/+$", "")
-	if value == LEGACY_BRIDGE_URL or value == "http://127.0.0.1:5000" or value == "http://127.0.0.1:5000/v1" then
-		value = DEFAULT_BRIDGE_URL
+	if value == CONFIG.LEGACY_BRIDGE_URL or value == "http://127.0.0.1:5000" or value == "http://127.0.0.1:5000/v1" then
+		value = CONFIG.DEFAULT_BRIDGE_URL
 	end
 	if value:match("/v1$") then
 		value = value .. "/studio"
@@ -908,7 +911,7 @@ local function currentProjectProfileKey()
 end
 
 local function loadProjectProfiles()
-	local raw = plugin:GetSetting(PROJECT_PROFILES_KEY)
+	local raw = plugin:GetSetting(CONFIG.PROJECT_PROFILES_KEY)
 	if type(raw) == "table" then
 		return raw
 	end
@@ -929,7 +932,7 @@ local function saveProjectProfiles()
 		return HttpService:JSONEncode(state.projectProfiles or {})
 	end)
 	if okEncode and type(encoded) == "string" then
-		plugin:SetSetting(PROJECT_PROFILES_KEY, encoded)
+		plugin:SetSetting(CONFIG.PROJECT_PROFILES_KEY, encoded)
 	end
 end
 local function persistBridgeSettings()
@@ -1278,7 +1281,7 @@ local function buildServerCommandText()
 end
 
 local function buildAgentPrompt(language)
-	local baseUrl = tostring(state.bridgeBaseUrl or DEFAULT_BRIDGE_URL):gsub("/v1/studio$", "")
+	local baseUrl = tostring(state.bridgeBaseUrl or CONFIG.DEFAULT_BRIDGE_URL):gsub("/v1/studio$", "")
 	if language == "EN" then
 		return table.concat({
 			string.format("Work only through RBXMCP at %s.", baseUrl),
@@ -1343,7 +1346,7 @@ local function scheduleLogRender()
 		return
 	end
 	state.logRenderScheduled = true
-	task.delay(LOG_RENDER_THROTTLE, function()
+	task.delay(CONFIG.LOG_RENDER_THROTTLE, function()
 		state.logRenderScheduled = false
 		renderLogEntries()
 	end)
@@ -1451,20 +1454,30 @@ renderLogEntries = function()
 	logDroppedLabel.Text = state.logDropped > 0 and string.format("Dropped: %d", state.logDropped) or ""
 end
 
+local function currentTraceContext()
+	if type(state.lastCommandContext) ~= "table" then
+		return nil, nil
+	end
+	return state.lastCommandContext.requestId, state.lastCommandContext.commandId
+end
+
 local function addLog(level, category, title, details)
 	if not shouldLogEvent(level, category, title) then
 		return
 	end
 
+	local requestId, commandId = currentTraceContext()
 	local entry = {
 		time = nowIso(),
 		level = tostring(level or "info"),
 		category = tostring(category or "ui"),
 		title = shortText(title, 160),
 		details = tostring(details or ""),
+		requestId = requestId,
+		commandId = commandId,
 	}
 	table.insert(state.logEntries, entry)
-	if #state.logEntries > LOG_LIMIT then
+	if #state.logEntries > CONFIG.LOG_LIMIT then
 		table.remove(state.logEntries, 1)
 		state.logDropped = state.logDropped + 1
 	end
@@ -1799,6 +1812,9 @@ local orderedServices = {
 	"StarterPack",
 }
 
+local collectTags
+local collectAttributes
+
 local function getPathSegments(instance)
 	local segments = {}
 	local current = instance
@@ -1829,6 +1845,8 @@ local function serializeScript(instance)
 		hash = sourceHash(source),
 		readChannel = readChannel,
 		draftAware = draftAware,
+		tags = collectTags(instance),
+		attributes = collectAttributes(instance),
 	}
 end
 
@@ -2036,6 +2054,9 @@ local function encodeUiValue(value)
 	if kind == "Vector2" then
 		return { type = "Vector2", x = value.X, y = value.Y }
 	end
+	if kind == "Vector3" then
+		return { type = "Vector3", x = value.X, y = value.Y, z = value.Z }
+	end
 	if kind == "EnumItem" then
 		return { type = "Enum", enumType = tostring(value.EnumType), value = value.Name }
 	end
@@ -2093,6 +2114,9 @@ local function decodeUiValue(value)
 	if value.type == "Vector2" then
 		return Vector2.new(tonumber(value.x) or 0, tonumber(value.y) or 0)
 	end
+	if value.type == "Vector3" then
+		return Vector3.new(tonumber(value.x) or 0, tonumber(value.y) or 0, tonumber(value.z) or 0)
+	end
 	if value.type == "Enum" and type(value.enumType) == "string" and type(value.value) == "string" then
 		local enumName = value.enumType:match("Enum%.(.+)$") or value.enumType
 		local enumTable = Enum[enumName]
@@ -2118,6 +2142,91 @@ local function decodeUiValue(value)
 		return Rect.new(tonumber(value.minX) or 0, tonumber(value.minY) or 0, tonumber(value.maxX) or 0, tonumber(value.maxY) or 0)
 	end
 	return nil
+end
+
+collectTags = function(instance)
+	local tags = {}
+	local okTags, rawTags = pcall(function()
+		return CollectionService:GetTags(instance)
+	end)
+	if okTags and type(rawTags) == "table" then
+		for _, tag in ipairs(rawTags) do
+			if type(tag) == "string" and tag ~= "" then
+				table.insert(tags, tag)
+			end
+		end
+		table.sort(tags)
+	end
+	return tags
+end
+
+collectAttributes = function(instance)
+	local attrs = {}
+	local okAttrs, rawAttrs = pcall(function()
+		return instance:GetAttributes()
+	end)
+	if not okAttrs or type(rawAttrs) ~= "table" then
+		return nil
+	end
+	for key, rawValue in pairs(rawAttrs) do
+		local encoded = encodeUiValue(rawValue)
+		if encoded ~= nil then
+			attrs[tostring(key)] = encoded
+		end
+	end
+	if next(attrs) == nil then
+		return nil
+	end
+	return attrs
+end
+
+local function applyInstanceMetadata(instance, addTags, removeTags, attributes, clearAttributes)
+	if type(addTags) == "table" then
+		for _, tag in ipairs(addTags) do
+			if type(tag) == "string" and tag ~= "" then
+				local okTag, tagErr = pcall(function()
+					CollectionService:AddTag(instance, tag)
+				end)
+				if not okTag then
+					return false, "metadata_mutation_failed", tostring(tagErr)
+				end
+			end
+		end
+	end
+	if type(removeTags) == "table" then
+		for _, tag in ipairs(removeTags) do
+			if type(tag) == "string" and tag ~= "" then
+				local okTag, tagErr = pcall(function()
+					CollectionService:RemoveTag(instance, tag)
+				end)
+				if not okTag then
+					return false, "metadata_mutation_failed", tostring(tagErr)
+				end
+			end
+		end
+	end
+	if type(attributes) == "table" then
+		for key, encodedValue in pairs(attributes) do
+			local decoded = decodeUiValue(encodedValue)
+			local okSet, setErr = pcall(function()
+				instance:SetAttribute(tostring(key), decoded)
+			end)
+			if not okSet then
+				return false, "metadata_mutation_failed", tostring(setErr)
+			end
+		end
+	end
+	if type(clearAttributes) == "table" then
+		for _, key in ipairs(clearAttributes) do
+			local okClear, clearErr = pcall(function()
+				instance:SetAttribute(tostring(key), nil)
+			end)
+			if not okClear then
+				return false, "metadata_mutation_failed", tostring(clearErr)
+			end
+		end
+	end
+	return true, nil, nil
 end
 
 local function zeroValueFor(currentValue)
@@ -2155,6 +2264,44 @@ local function zeroValueFor(currentValue)
 	return nil
 end
 
+local function sortedKeyValuePairs(map)
+	local keys = {}
+	if type(map) ~= "table" then
+		return keys
+	end
+	for key in pairs(map) do
+		table.insert(keys, tostring(key))
+	end
+	table.sort(keys)
+	local pairsOut = {}
+	for _, key in ipairs(keys) do
+		table.insert(pairsOut, {
+			key = key,
+			value = map[key],
+		})
+	end
+	return pairsOut
+end
+
+local function canonicalizeUiNodeForVersion(node)
+	local children = {}
+	if type(node.children) == "table" then
+		for _, child in ipairs(node.children) do
+			table.insert(children, canonicalizeUiNodeForVersion(child))
+		end
+	end
+	return {
+		path = type(node.path) == "table" and node.path or {},
+		service = tostring(node.service or (type(node.path) == "table" and node.path[1]) or ""),
+		name = tostring(node.name or ""),
+		className = tostring(node.className or ""),
+		props = sortedKeyValuePairs(node.props),
+		tags = type(node.tags) == "table" and node.tags or {},
+		attributes = sortedKeyValuePairs(node.attributes),
+		children = children,
+	}
+end
+
 local function serializeUiNode(instance)
 	local props = {}
 	local unsupported = {}
@@ -2178,15 +2325,19 @@ local function serializeUiNode(instance)
 		end
 	end
 	local path = getPathSegments(instance)
+	local tags = collectTags(instance)
+	local attributes = collectAttributes(instance)
 	local canonical = {
 		path = path,
 		service = path[1],
 		name = instance.Name,
 		className = instance.ClassName,
 		props = props,
+		tags = tags,
+		attributes = attributes,
 		children = children,
 	}
-	local version = sourceHash(HttpService:JSONEncode(canonical))
+	local version = sourceHash(HttpService:JSONEncode(canonicalizeUiNodeForVersion(canonical)))
 	return {
 		path = path,
 		service = path[1],
@@ -2195,6 +2346,8 @@ local function serializeUiNode(instance)
 		version = version,
 		updatedAt = nowIso(),
 		props = props,
+		tags = tags,
+		attributes = attributes,
 		unsupportedProperties = unsupported,
 		children = children,
 	}
@@ -2400,6 +2553,7 @@ local function pushLogs(entries)
 end
 
 local function appendRuntimeLog(level, message, source)
+	local requestId, commandId = currentTraceContext()
 	local entry = {
 		id = HttpService:GenerateGUID(false),
 		time = nowIso(),
@@ -2407,6 +2561,8 @@ local function appendRuntimeLog(level, message, source)
 		message = tostring(message or ""),
 		source = source,
 		playSessionId = state.playSessionId,
+		requestId = requestId,
+		commandId = commandId,
 	}
 	table.insert(state.runtimeLogBuffer, entry)
 	if #state.runtimeLogBuffer > 1000 then
@@ -2495,6 +2651,20 @@ local function executeUiOperation(operation)
 		local okApply, applyCode, applyMessage = applyUiProps(resolved.instance, operation.props, operation.clearProps)
 		return okApply, applyCode, applyMessage, nil
 	end
+	if operation.op == "update_metadata" then
+		local resolved, errCode, errDetails = resolveUiPath(operation.path)
+		if not resolved then
+			return false, errCode or "not_found", "UI node not found", errDetails
+		end
+		local okApply, applyCode, applyMessage = applyInstanceMetadata(
+			resolved.instance,
+			operation.addTags,
+			operation.removeTags,
+			operation.attributes,
+			operation.clearAttributes
+		)
+		return okApply, applyCode, applyMessage, nil
+	end
 	if operation.op == "create_node" then
 		if not isUiClassSupported(operation.className) then
 			return false, "ui_class_not_supported", "Only UI-relevant classes are supported by the UI API", {
@@ -2534,6 +2704,17 @@ local function executeUiOperation(operation)
 		if not okProps then
 			created:Destroy()
 			return false, propCode, propMessage, nil
+		end
+		local okMeta, metaCode, metaMessage = applyInstanceMetadata(
+			created,
+			operation.tags,
+			nil,
+			operation.attributes,
+			nil
+		)
+		if not okMeta then
+			created:Destroy()
+			return false, metaCode, metaMessage, nil
 		end
 		applyLayoutOrder(created, operation.index)
 		return true, nil, nil, nil
@@ -2580,10 +2761,15 @@ local function pushSnapshot(mode, scripts)
 	})
 end
 
-local function sendResult(commandId, okResult, resultPayload, errorPayload)
+local function sendResult(commandId, okResult, resultPayload, errorPayload, requestId)
+	local effectiveRequestId = requestId
+	if type(effectiveRequestId) ~= "string" or effectiveRequestId == "" then
+		effectiveRequestId = select(1, currentTraceContext())
+	end
 	return requestJson("/result", {
 		sessionId = state.sessionId,
 		commandId = commandId,
+		requestId = effectiveRequestId,
 		ok = okResult,
 		result = resultPayload,
 		error = errorPayload,
@@ -2604,7 +2790,12 @@ local function sendInternalCommandError(command, errValue)
 	local okSend, sendResp = sendResult(commandId, false, nil, {
 		code = "plugin_internal_error",
 		message = message,
-	})
+		details = {
+			requestId = type(command.payload) == "table" and command.payload.requestId or nil,
+			commandId = commandId,
+			stackTrace = message,
+		},
+	}, type(command.payload) == "table" and command.payload.requestId or nil)
 	if not okSend then
 		setError("Failed to send plugin_internal_error: " .. tostring(sendResp))
 	end
@@ -2629,9 +2820,12 @@ end
 local function execCommand(command)
 	local commandType = command.type
 	local payload = command.payload or {}
+	local requestId = type(payload.requestId) == "string" and payload.requestId or nil
 	state.lastCommandContext = {
 		command = tostring(commandType),
 		path = type(payload.path) == "table" and table.concat(payload.path, "/") or nil,
+		requestId = requestId,
+		commandId = type(command.commandId) == "string" and command.commandId or nil,
 	}
 	addLog("info", "poll", "Command received", tostring(commandType))
 	clearWarning()
@@ -2910,34 +3104,21 @@ local function execCommand(command)
 			setWarning(tostring(warningCode) .. ": " .. tostring(warningMessage))
 		end
 
-		local scriptPayload, afterCode, afterMessage = serializeScript(scriptInstance)
-		if not scriptPayload then
-			addLog("error", "write", "post-write read failed", tostring(afterMessage or afterCode))
-			sendResult(command.commandId, false, nil, {
-				code = afterCode or "draft_unavailable",
-				message = tostring(afterMessage or "Failed to read updated script"),
-			})
-			return
-		end
-		local okPush, pushResp = pushSnapshot("partial", { scriptPayload })
-		if not okPush or pushResp.ok ~= true then
-			addLog("error", "write", "post-write push failed", tostring(pushResp))
-			sendResult(command.commandId, false, nil, {
-				code = "push_failed",
-				message = tostring(pushResp),
-			})
-			return
-		end
-
+		local resolvedPath = getPathSegments(scriptInstance)
+		local scriptHash = sourceHash(newSource)
 		sendResult(command.commandId, true, {
-			path = scriptPayload.path,
-			hash = scriptPayload.hash,
+			path = resolvedPath,
+			hash = scriptHash,
+			className = scriptInstance.ClassName,
 			writeChannel = writeChannel,
 			draftAware = true,
+			readChannel = writeChannel or "unknown",
+			tags = collectTags(scriptInstance),
+			attributes = collectAttributes(scriptInstance),
 			warningCode = warningCode,
 			warningMessage = warningMessage,
 		}, nil)
-		addLog("info", "write", "update ok", table.concat(scriptPayload.path, "/"))
+		addLog("info", "write", "update ok", table.concat(resolvedPath, "/"))
 		setSyncNow()
 		return
 	end
@@ -2985,6 +3166,72 @@ local function execCommand(command)
 			deleted = true,
 		}, nil)
 		addLog("info", "write", "delete ok", table.concat(path, "/"))
+		setSyncNow()
+		return
+	end
+
+	if commandType == "set_script_metadata_if_hash" then
+		local path = payload.path
+		local expectedHash = tostring(payload.expectedHash or "")
+		local scriptInstance = findByPath(path)
+		if not scriptInstance then
+			sendResult(command.commandId, false, nil, {
+				code = "not_found",
+				message = "Script not found for path",
+				details = {
+					path = path,
+				},
+			})
+			return
+		end
+		local currentSource, readCode, readMessage = DraftAccess.readSource(scriptInstance)
+		if not currentSource then
+			sendResult(command.commandId, false, nil, {
+				code = readCode or "draft_unavailable",
+				message = tostring(readMessage or "Failed to read script via draft pipeline"),
+				details = {
+					path = path,
+				},
+			})
+			return
+		end
+		local currentHash = sourceHash(currentSource)
+		if currentHash ~= expectedHash then
+			sendResult(command.commandId, false, nil, {
+				code = "hash_conflict",
+				message = "Hash mismatch in Studio",
+				details = {
+					expectedHash = expectedHash,
+					currentHash = currentHash,
+				},
+			})
+			return
+		end
+		local okMeta, metaCode, metaMessage = applyInstanceMetadata(
+			scriptInstance,
+			payload.addTags,
+			payload.removeTags,
+			payload.attributes,
+			payload.clearAttributes
+		)
+		if not okMeta then
+			sendResult(command.commandId, false, nil, {
+				code = metaCode or "metadata_mutation_failed",
+				message = tostring(metaMessage or "Failed to update script metadata"),
+			})
+			return
+		end
+		local resolvedPath = getPathSegments(scriptInstance)
+		sendResult(command.commandId, true, {
+			path = resolvedPath,
+			hash = currentHash,
+			className = scriptInstance.ClassName,
+			draftAware = true,
+			readChannel = "editor",
+			tags = collectTags(scriptInstance),
+			attributes = collectAttributes(scriptInstance),
+		}, nil)
+		addLog("info", "write", "script metadata ok", table.concat(resolvedPath, "/"))
 		setSyncNow()
 		return
 	end
@@ -3131,36 +3378,21 @@ local function execCommand(command)
 		if warningCode and warningMessage then
 			setWarning(tostring(warningCode) .. ": " .. tostring(warningMessage))
 		end
-
-		local scriptPayload, afterCode, afterMessage = serializeScript(scriptInstance)
-		if not scriptPayload then
-			addLog("error", "write", "upsert read failed", tostring(afterMessage or afterCode))
-			sendResult(command.commandId, false, nil, {
-				code = afterCode or "draft_unavailable",
-				message = tostring(afterMessage or "Failed to read updated script"),
-			})
-			return
-		end
-		local okPush, pushResp = pushSnapshot("partial", { scriptPayload })
-		if not okPush or pushResp.ok ~= true then
-			addLog("error", "write", "upsert push failed", tostring(pushResp))
-			sendResult(command.commandId, false, nil, {
-				code = "push_failed",
-				message = tostring(pushResp),
-			})
-			return
-		end
-
+		local resolvedPath = getPathSegments(scriptInstance)
+		local scriptHash = sourceHash(newSource)
 		sendResult(command.commandId, true, {
-			path = scriptPayload.path,
-			hash = scriptPayload.hash,
-			className = scriptPayload.class,
+			path = resolvedPath,
+			hash = scriptHash,
+			className = scriptInstance.ClassName,
 			writeChannel = writeChannel,
 			draftAware = true,
+			readChannel = writeChannel or "unknown",
+			tags = collectTags(scriptInstance),
+			attributes = collectAttributes(scriptInstance),
 			warningCode = warningCode,
 			warningMessage = warningMessage,
 		}, nil)
-		addLog("info", "write", "upsert ok", table.concat(scriptPayload.path, "/"))
+		addLog("info", "write", "upsert ok", table.concat(resolvedPath, "/"))
 		setSyncNow()
 		return
 	end
@@ -3204,7 +3436,7 @@ local function hello()
 		clientId = state.clientId,
 		placeId = tostring(game.PlaceId),
 		placeName = game.Name,
-		pluginVersion = PLUGIN_VERSION,
+		pluginVersion = CONFIG.PLUGIN_VERSION,
 		editorApiAvailable = DraftAccess.editorApiAvailable() and true or false,
 		base64Transport = true,
 		logCaptureAvailable = state.logCaptureAvailable and true or false,
@@ -3261,7 +3493,7 @@ local function pollOnce()
 
 	local okPoll, pollResp = requestJson("/poll", {
 		sessionId = state.sessionId,
-		waitMs = POLL_WAIT_MS,
+		waitMs = CONFIG.POLL_WAIT_MS,
 	})
 	if not okPoll then
 		state.sessionId = nil
@@ -3340,6 +3572,8 @@ local function ensureLoop()
 					end
 				elseif (state.requestBackoffUntil or 0) > os.clock() then
 					task.wait(math.max(0.5, (state.requestBackoffUntil or 0) - os.clock()))
+				else
+					task.wait(0.15)
 				end
 			end
 		end
@@ -3481,12 +3715,3 @@ end)
 addLog("info", "ui", "Plugin initialized", state.bridgeBaseUrl)
 updateUi()
 ensureLoop()
-
-
-
-
-
-
-
-
-

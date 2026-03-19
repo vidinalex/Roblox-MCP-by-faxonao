@@ -251,21 +251,21 @@ describe("retrieval tools", () => {
     await seedScripts(api, bridge, sessionId, [{ path, class: "Script", source: studioSource }]);
     const update1 = bridge.updateScript(path, "print('beta_token')\n", sourceHash(studioSource));
 
-    const refresh1a = await pollOne(api, sessionId);
-    expect(refresh1a.type).toBe("snapshot_script_by_path");
-    await pushSnapshot(api, sessionId, "partial", [{ path, class: "Script", source: studioSource }]);
-    await complete(api, sessionId, refresh1a.commandId);
-
     const write1 = await pollOne(api, sessionId);
     expect(write1.type).toBe("set_script_source_if_hash");
     studioSource = "print('beta_token')\n";
+    await complete(api, sessionId, write1.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+    const verify1 = await pollOne(api, sessionId);
+    expect(verify1.type).toBe("snapshot_script_by_path");
     await pushSnapshot(api, sessionId, "partial", [{ path, class: "Script", source: studioSource }]);
-    await complete(api, sessionId, write1.commandId, { writeChannel: "editor", draftAware: true });
-
-    const refresh1b = await pollOne(api, sessionId);
-    expect(refresh1b.type).toBe("snapshot_script_by_path");
-    await pushSnapshot(api, sessionId, "partial", [{ path, class: "Script", source: studioSource }]);
-    await complete(api, sessionId, refresh1b.commandId);
+    await complete(api, sessionId, verify1.commandId);
     const done1 = await update1;
     expect(done1.hash).toBe(sourceHash(studioSource));
 
@@ -332,6 +332,29 @@ describe("retrieval tools", () => {
 
     const relatedByQuery = await bridge.getRelatedContext({ query: "Shop" }, 1000);
     expect(relatedByQuery.relatedUi.some((item: { path: string[] }) => item.path.join("/") === root.children[0].path.join("/"))).toBe(true);
+  });
+
+  it("truncates oversized source before retrieval indexing", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const largeSource = `return [[${"x".repeat(300_000)}]]`;
+    const scriptPath = ["ReplicatedStorage", "Bench", "HugeModule"];
+
+    await seedScripts(api, bridge, sessionId, [
+      {
+        path: scriptPath,
+        class: "ModuleScript",
+        source: largeSource
+      }
+    ]);
+
+    const indexed = [...(bridge as any).index.scripts.values()].find(
+      (item: { path: string[] }) => item.path.join("/") === scriptPath.join("/")
+    );
+    expect(indexed).toBeTruthy();
+    expect(typeof indexed.source).toBe("string");
+    expect(indexed.source.length).toBeLessThan(70_000);
+    expect(indexed.source).toContain("source truncated for retrieval index");
   });
 
   it("summarizes UI tree and explains common errors", async () => {

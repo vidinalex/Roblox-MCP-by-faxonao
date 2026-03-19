@@ -96,6 +96,8 @@ function cloneNode(node: UiNodeSnapshot): UiNodeSnapshot {
     version: node.version,
     updatedAt: node.updatedAt,
     props: { ...node.props },
+    tags: [...node.tags],
+    attributes: { ...node.attributes },
     unsupportedProperties: [...node.unsupportedProperties],
     children: node.children.map((child) => cloneNode(child))
   };

@@ -1,0 +1,8 @@
+﻿{
+  "paths": [
+    "ServerScriptService/Init_Server",
+    "ServerScriptService/Init_Client"
+  ],
+  "includeSource": true,
+  "forceRefresh": true
+}

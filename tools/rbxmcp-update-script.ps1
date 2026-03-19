@@ -1,0 +1,45 @@
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)]
+  [string]$Path,
+
+  [Parameter(Mandatory = $true)]
+  [string]$ExpectedHash,
+
+  [Parameter(Mandatory = $true)]
+  [string]$SourceFile,
+
+  [string]$PlaceId,
+
+  [int]$Port = 0,
+
+  [string]$HostName = "127.0.0.1"
+)
+
+if (-not (Test-Path -LiteralPath $SourceFile)) {
+  throw "Source file not found: $SourceFile"
+}
+
+$source = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $SourceFile), [System.Text.Encoding]::UTF8)
+$payload = @{
+  path = $Path
+  expectedHash = $ExpectedHash
+  newSource = $source
+}
+
+if (-not [string]::IsNullOrWhiteSpace($PlaceId)) {
+  $payload.placeId = $PlaceId
+}
+
+$tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("rbxmcp-update-{0}.json" -f [guid]::NewGuid().ToString("N"))
+try {
+  [System.IO.File]::WriteAllText(
+    $tempFile,
+    ($payload | ConvertTo-Json -Depth 8 -Compress),
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  & "$PSScriptRoot\rbxmcp-post.ps1" -Endpoint "/v1/agent/update_script" -JsonFile $tempFile -Port $Port -HostName $HostName
+  exit $LASTEXITCODE
+} finally {
+  Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+}

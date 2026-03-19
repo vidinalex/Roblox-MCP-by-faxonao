@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import express, { NextFunction, Request, Response } from "express";
 import { z } from "zod/v4";
 import { BridgeService } from "./bridgeService.js";
+import { buildAgentSchemaDocument, buildCapabilitiesContractSummary, getAgentContractByEndpointPath, parsePublicContractPayload } from "./agentContract.js";
 import { BridgeError } from "../lib/errors.js";
+import { serializePublicPayload, summarizeErrorShape } from "../lib/publicContract.js";
 
 const helloSchema = z.object({
   clientId: z.string().min(1),
@@ -21,6 +24,7 @@ const pollSchema = z.object({
 const resultSchema = z.object({
   sessionId: z.string().min(1),
   commandId: z.string().min(1),
+  requestId: z.string().optional(),
   ok: z.boolean(),
   result: z.record(z.string(), z.unknown()).optional(),
   error: z
@@ -31,6 +35,16 @@ const resultSchema = z.object({
     })
     .optional()
 });
+
+const unknownAttributeMapSchema = z.preprocess(
+  (value) => {
+    if (Array.isArray(value) && value.length === 0) {
+      return {};
+    }
+    return value;
+  },
+  z.record(z.string(), z.unknown())
+);
 
 const pushSnapshotSchema = z.object({
   sessionId: z.string().min(1),
@@ -43,7 +57,9 @@ const pushSnapshotSchema = z.object({
       source: z.string().optional(),
       sourceBase64: z.string().optional(),
       readChannel: z.enum(["editor", "unknown"]).optional(),
-      draftAware: z.boolean().optional()
+      draftAware: z.boolean().optional(),
+      tags: z.array(z.string()).optional(),
+      attributes: unknownAttributeMapSchema.optional()
     })
   )
 });
@@ -60,6 +76,7 @@ const uiValueSchema: z.ZodTypeAny = z.union([
     y: z.object({ type: z.literal("UDim"), scale: z.number(), offset: z.number() })
   }),
   z.object({ type: z.literal("Vector2"), x: z.number(), y: z.number() }),
+  z.object({ type: z.literal("Vector3"), x: z.number(), y: z.number(), z: z.number() }),
   z.object({ type: z.literal("Enum"), enumType: z.string(), value: z.string() }),
   z.object({
     type: z.literal("ColorSequence"),
@@ -82,6 +99,16 @@ const uiPropsSchema = z.preprocess(
   z.record(z.string(), uiValueSchema).default({})
 );
 
+const attributeMapSchema = z.preprocess(
+  (value) => {
+    if (Array.isArray(value) && value.length === 0) {
+      return {};
+    }
+    return value;
+  },
+  z.record(z.string(), uiValueSchema)
+);
+
 const uiNodeSchema: z.ZodTypeAny = z.lazy(() =>
   z.object({
     path: z.array(z.string().min(1)).min(2),
@@ -91,6 +118,8 @@ const uiNodeSchema: z.ZodTypeAny = z.lazy(() =>
     version: z.string(),
     updatedAt: z.string().optional(),
     props: uiPropsSchema,
+    tags: z.array(z.string()).optional(),
+    attributes: attributeMapSchema.optional(),
     unsupportedProperties: z.array(z.string()).optional(),
     children: z.array(uiNodeSchema).default([])
   })
@@ -111,7 +140,9 @@ const pushLogsSchema = z.object({
       level: z.enum(["info", "warn", "error"]).optional(),
       message: z.string(),
       source: z.string().optional(),
-      playSessionId: z.string().optional()
+      playSessionId: z.string().optional(),
+      requestId: z.string().optional(),
+      commandId: z.string().optional()
     })
   )
 });
@@ -168,6 +199,15 @@ const agentMoveScriptSchema = z.object({
   newParentPath: z.array(z.string().min(1)).min(1),
   expectedHash: z.string().min(1),
   newName: z.string().min(1).optional(),
+  placeId: z.string().min(1).optional()
+});
+const agentUpdateScriptMetadataSchema = z.object({
+  path: z.array(z.string().min(1)).min(2),
+  expectedHash: z.string().min(1),
+  addTags: z.array(z.string().min(1)).optional(),
+  removeTags: z.array(z.string().min(1)).optional(),
+  attributes: attributeMapSchema.optional(),
+  clearAttributes: z.array(z.string().min(1)).optional(),
   placeId: z.string().min(1).optional()
 });
 
@@ -268,6 +308,12 @@ const agentDependenciesSchema = z.object({
 const agentRefreshScriptsSchema = z.object({
   paths: z.array(z.array(z.string().min(1)).min(2)).min(1).max(200)
 });
+const agentGetScriptsSchema = z.object({
+  paths: z.array(z.array(z.string().min(1)).min(2)).min(1).max(200),
+  includeSource: z.boolean().optional(),
+  forceRefresh: z.boolean().optional(),
+  maxAgeMs: z.number().int().min(0).max(3_600_000).optional()
+});
 
 const agentListUiRootsSchema = z.object({
   service: z.string().optional(),
@@ -339,6 +385,7 @@ const agentApplyScriptPatchSchema = z.object({
   path: z.array(z.string().min(1)).min(2),
   expectedHash: z.string().min(1),
   patch: z.array(scriptPatchOpSchema).min(1),
+  dryRun: z.boolean().optional(),
   placeId: z.string().min(1).optional()
 });
 
@@ -374,12 +421,23 @@ const agentUpdateUiSchema = z.object({
   clearProps: z.array(z.string()).optional(),
   placeId: z.string().min(1).optional()
 });
+const agentUpdateUiMetadataSchema = z.object({
+  path: z.array(z.string().min(1)).min(2),
+  expectedVersion: z.string().min(1),
+  addTags: z.array(z.string().min(1)).optional(),
+  removeTags: z.array(z.string().min(1)).optional(),
+  attributes: attributeMapSchema.optional(),
+  clearAttributes: z.array(z.string().min(1)).optional(),
+  placeId: z.string().min(1).optional()
+});
 
 const agentCreateUiSchema = z.object({
   parentPath: z.array(z.string().min(1)).min(2),
   className: z.string().min(1),
   name: z.string().min(1),
   props: z.record(z.string(), uiValueSchema).optional(),
+  tags: z.array(z.string().min(1)).optional(),
+      attributes: attributeMapSchema.optional(),
   index: z.number().int().min(0).optional(),
   placeId: z.string().min(1).optional()
 });
@@ -406,6 +464,8 @@ const uiMutationOpSchema = z.discriminatedUnion("op", [
     className: z.string().min(1),
     name: z.string().min(1),
     props: z.record(z.string(), uiValueSchema).optional(),
+    tags: z.array(z.string().min(1)).optional(),
+  attributes: attributeMapSchema.optional(),
     index: z.number().int().min(0).optional(),
     id: z.string().min(1).optional()
   }),
@@ -415,6 +475,15 @@ const uiMutationOpSchema = z.discriminatedUnion("op", [
     pathRef: z.string().min(1).optional(),
     props: z.record(z.string(), uiValueSchema).default({}),
     clearProps: z.array(z.string()).optional()
+  }),
+  z.object({
+    op: z.literal("update_metadata"),
+    path: z.array(z.string().min(1)).min(2).optional(),
+    pathRef: z.string().min(1).optional(),
+    addTags: z.array(z.string().min(1)).optional(),
+    removeTags: z.array(z.string().min(1)).optional(),
+      attributes: attributeMapSchema.optional(),
+    clearAttributes: z.array(z.string().min(1)).optional()
   }),
   z.object({
     op: z.literal("delete_node"),
@@ -448,19 +517,147 @@ const agentFindUiBindingsSchema = z.object({
 const agentGetLogsSchema = z.object({
   cursor: z.string().optional(),
   limit: z.number().int().min(1).max(500).optional(),
-  minLevel: z.enum(["info", "warn", "error"]).optional()
+  minLevel: z.enum(["info", "warn", "error"]).optional(),
+  requestId: z.string().optional(),
+  sinceTime: z.string().optional(),
+  untilTime: z.string().optional()
 });
+const agentRequestTraceSchema = z.object({
+  requestId: z.string().min(1)
+});
+const agentValidatePayloadSchema = z.object({
+  endpoint: z.string().min(1),
+  payload: z.record(z.string(), z.unknown())
+});
+
+const INLINE_WRITE_SOURCE_MAX_BYTES = 64 * 1024;
+
+function normalizeAgentRequestBody(req: Request): void {
+  const contractMatch = getAgentContractByEndpointPath(req.path);
+  if (!contractMatch || contractMatch.contract.method !== "POST") {
+    return;
+  }
+  const normalized = contractMatch.id === "validate_payload"
+    ? contractMatch.contract.requestSchema.parse(req.body ?? {})
+    : parsePublicContractPayload(contractMatch.id, req.body ?? {});
+  req.body = normalized;
+  resLocals(req).normalizedPayload = normalized;
+  resLocals(req).trace?.setPayload(serializePublicPayload(normalized));
+}
+
+function resLocals(req: Request): {
+  requestId?: string;
+  trace?: ReturnType<BridgeService["createTrace"]>;
+  normalizedPayload?: unknown;
+} {
+  return req.res?.locals ?? {};
+}
+
+function buildStructuredInvalidRequest(detailsMessage: string, exampleValue: unknown) {
+  const badField = detailsMessage.split(" ")[0] || "payload";
+  return {
+    expectedShape: "Canonical agent payload from /v1/agent/schema",
+    ...summarizeErrorShape(badField, "slash-delimited string", "non-string", exampleValue),
+    exampleFix: exampleValue
+  };
+}
+
+function buildScriptWriteResponse(script: {
+  path: string[];
+  className: string;
+  source: string;
+  hash: string;
+  updatedAt: string;
+  draftAware: boolean;
+  readChannel: string;
+  tags: string[];
+  attributes: Record<string, unknown>;
+}) {
+  const size = Buffer.byteLength(script.source, "utf8");
+  if (size <= INLINE_WRITE_SOURCE_MAX_BYTES) {
+    return {
+      path: script.path,
+      className: script.className,
+      source: script.source,
+      hash: script.hash,
+      updatedAt: script.updatedAt,
+      draftAware: script.draftAware,
+      readChannel: script.readChannel,
+      tags: script.tags,
+      attributes: script.attributes,
+      size,
+      sourceOmitted: false
+    };
+  }
+  return {
+    path: script.path,
+    className: script.className,
+    hash: script.hash,
+    updatedAt: script.updatedAt,
+    draftAware: script.draftAware,
+    readChannel: script.readChannel,
+    tags: script.tags,
+    attributes: script.attributes,
+    size,
+    sourceOmitted: true,
+    sourceInlineMaxBytes: INLINE_WRITE_SOURCE_MAX_BYTES
+  };
+}
 
 export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   const app = express();
   app.use(express.json({ limit: "15mb" }));
+
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/v1/agent")) {
+      next();
+      return;
+    }
+    const requestId = randomUUID();
+    res.locals.requestId = requestId;
+    res.locals.trace = bridge.createTrace(requestId, "http", req.path);
+    const originalJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      const payload = body && typeof body === "object"
+        ? { ...(body as Record<string, unknown>), requestId }
+        : { ok: true, data: body, requestId };
+      const serialized = serializePublicPayload(payload);
+      if ((payload as { ok?: boolean }).ok === false) {
+        res.locals.trace?.finishError(serialized);
+      } else {
+        res.locals.trace?.finishOk(serialized);
+      }
+      return originalJson(serialized);
+    }) as typeof res.json;
+    if (req.method === "POST") {
+      try {
+        normalizeAgentRequestBody(req);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        next(new BridgeError("invalid_request", "Validation failed", 400, buildStructuredInvalidRequest(message, {
+          path: "Service/Folder/Script"
+        })));
+        return;
+      }
+    } else {
+      res.locals.trace?.setPayload({});
+    }
+    next();
+  });
 
   app.get("/healthz", (_req, res) => {
     res.json(bridge.health());
   });
 
   app.get("/v1/agent/capabilities", (_req, res) => {
-    res.json(bridge.capabilities());
+    res.json({
+      ...bridge.capabilities(),
+      contract: buildCapabilitiesContractSummary()
+    });
+  });
+
+  app.get("/v1/agent/schema", (_req, res) => {
+    res.json(buildAgentSchemaDocument());
   });
 
   app.post("/v1/agent/health", (_req, res) => {
@@ -489,9 +686,36 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
         updatedAt: read.script.updatedAt,
         draftAware: read.script.draftAware,
         readChannel: read.script.readChannel,
+        tags: read.script.tags,
+        attributes: read.script.attributes,
         fromCache: read.fromCache,
         cacheAgeMs: read.cacheAgeMs,
         refreshedBeforeRead: read.refreshedBeforeRead
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/agent/get_script_metadata", async (req, res, next) => {
+    try {
+      const body = agentGetScriptSchema.parse(req.body ?? {});
+      res.json({ ok: true, ...(await bridge.getScriptMetadata(body.path, readFreshnessSchema.parse(body))) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/agent/get_scripts", async (req, res, next) => {
+    try {
+      const body = agentGetScriptsSchema.parse(req.body ?? {});
+      res.json({
+        ok: true,
+        ...(await bridge.getScripts(body.paths, {
+          includeSource: body.includeSource,
+          forceRefresh: body.forceRefresh,
+          maxAgeMs: body.maxAgeMs
+        }))
       });
     } catch (error) {
       next(error);
@@ -509,7 +733,9 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
         hash: script.hash,
         updatedAt: script.updatedAt,
         draftAware: script.draftAware,
-        readChannel: script.readChannel
+        readChannel: script.readChannel,
+        tags: script.tags,
+        attributes: script.attributes
       });
     } catch (error) {
       next(error);
@@ -519,15 +745,10 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/update_script", async (req, res, next) => {
     try {
       const body = agentUpdateScriptSchema.parse(req.body ?? {});
-      const script = await bridge.updateScript(body.path, body.newSource, body.expectedHash, body.placeId);
+      const script = await bridge.updateScript(body.path, body.newSource, body.expectedHash, body.placeId, res.locals.trace);
       res.json({
         ok: true,
-        path: script.path,
-        source: script.source,
-        hash: script.hash,
-        updatedAt: script.updatedAt,
-        draftAware: script.draftAware,
-        readChannel: script.readChannel
+        ...buildScriptWriteResponse(script)
       });
     } catch (error) {
       next(error);
@@ -537,16 +758,10 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/create_script", async (req, res, next) => {
     try {
       const body = agentCreateScriptSchema.parse(req.body ?? {});
-      const script = await bridge.createScript(body.path, body.className, body.source, body.placeId);
+      const script = await bridge.createScript(body.path, body.className, body.source, body.placeId, resLocals(req).trace);
       res.json({
         ok: true,
-        path: script.path,
-        className: script.className,
-        source: script.source,
-        hash: script.hash,
-        updatedAt: script.updatedAt,
-        draftAware: script.draftAware,
-        readChannel: script.readChannel
+        ...buildScriptWriteResponse(script)
       });
     } catch (error) {
       next(error);
@@ -568,12 +783,26 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
       const script = await bridge.moveScript(body.path, body.newParentPath, body.expectedHash, body.newName, body.placeId);
       res.json({
         ok: true,
+        ...buildScriptWriteResponse(script)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/agent/update_script_metadata", async (req, res, next) => {
+    try {
+      const body = agentUpdateScriptMetadataSchema.parse(req.body ?? {});
+      const script = await bridge.updateScriptMetadata(body.path, body.expectedHash, body, body.placeId, res.locals.trace);
+      res.json({
+        ok: true,
         path: script.path,
-        source: script.source,
         hash: script.hash,
         updatedAt: script.updatedAt,
         draftAware: script.draftAware,
-        readChannel: script.readChannel
+        readChannel: script.readChannel,
+        tags: script.tags,
+        attributes: script.attributes
       });
     } catch (error) {
       next(error);
@@ -607,6 +836,64 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
     }
   });
 
+  app.post("/v1/agent/validate_payload", async (req, res, next) => {
+    try {
+      const body = agentValidatePayloadSchema.parse(req.body ?? {});
+      const contractMatch = getAgentContractByEndpointPath(body.endpoint);
+      if (!contractMatch) {
+        throw new BridgeError("invalid_request", `Unknown endpoint for validation: ${body.endpoint}`, 400, {
+          badField: "endpoint",
+          exampleFix: { endpoint: "/v1/agent/get_script", payload: { path: "ServerScriptService/MainScript" } }
+        });
+      }
+      const normalizedPayload = parsePublicContractPayload(contractMatch.id, body.payload);
+      res.json({
+        ok: true,
+        valid: true,
+        endpoint: body.endpoint,
+        normalizedPayload,
+        issues: [],
+        expectedShape: z.toJSONSchema(contractMatch.contract.requestSchema),
+        exampleFix: contractMatch.contract.examples[0] ?? null
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.json({
+          ok: true,
+          valid: false,
+          issues: z.flattenError(error).fieldErrors,
+          expectedShape: "See /v1/agent/schema",
+          exampleFix: { endpoint: "/v1/agent/get_script", payload: { path: "ServerScriptService/MainScript" } }
+        });
+        return;
+      }
+      if (error instanceof Error) {
+        res.json({
+          ok: true,
+          valid: false,
+          issues: [error.message],
+          expectedShape: "See /v1/agent/schema",
+          exampleFix: { endpoint: "/v1/agent/get_script", payload: { path: "ServerScriptService/MainScript" } }
+        });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  app.post("/v1/agent/get_request_trace", async (req, res, next) => {
+    try {
+      const body = agentRequestTraceSchema.parse(req.body ?? {});
+      const trace = bridge.getRequestTrace(body.requestId);
+      if (!trace) {
+        throw new BridgeError("not_found", `Request trace not found: ${body.requestId}`, 404, { requestId: body.requestId });
+      }
+      res.json({ ok: true, trace });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/v1/agent/validate_operation", async (req, res, next) => {
     try {
       const body = agentValidateOperationSchema.parse(req.body ?? {});
@@ -619,7 +906,13 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/apply_script_patch", async (req, res, next) => {
     try {
       const body = agentApplyScriptPatchSchema.parse(req.body ?? {});
-      res.json({ ok: true, ...(await bridge.applyScriptPatch(body.path, body.expectedHash, body.patch, body.placeId)) });
+      res.json({
+        ok: true,
+        ...(await bridge.applyScriptPatch(body.path, body.expectedHash, body.patch, body.placeId, {
+          dryRun: body.dryRun,
+          trace: res.locals.trace
+        }))
+      });
     } catch (error) {
       next(error);
     }
@@ -872,6 +1165,16 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
     }
   });
 
+  app.post("/v1/agent/update_ui_metadata", async (req, res, next) => {
+    try {
+      const body = agentUpdateUiMetadataSchema.parse(req.body ?? {});
+      const node = await bridge.updateUiMetadata(body.path, body.expectedVersion, body, body.placeId);
+      res.json({ ok: true, node, version: node.version, updatedAt: node.updatedAt });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/v1/agent/apply_ui_batch", async (req, res, next) => {
     try {
       const body = agentApplyUiBatchSchema.parse(req.body ?? {});
@@ -923,7 +1226,7 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/create_ui", async (req, res, next) => {
     try {
       const body = agentCreateUiSchema.parse(req.body ?? {});
-      const node = await bridge.createUi(body.parentPath, body.className, body.name, body.props ?? {}, body.index, body.placeId);
+      const node = await bridge.createUi(body.parentPath, body.className, body.name, body.props ?? {}, body.index, body.placeId, body);
       res.json({ ok: true, node, version: node.version, updatedAt: node.updatedAt });
     } catch (error) {
       next(error);
@@ -953,7 +1256,7 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/get_logs", async (req, res, next) => {
     try {
       const body = agentGetLogsSchema.parse(req.body ?? {});
-      res.json({ ok: true, ...bridge.getLogs(body.cursor, body.limit, body.minLevel) });
+      res.json({ ok: true, ...bridge.getLogs(body.cursor, body.limit, body.minLevel, body.requestId, body.sinceTime, body.untilTime) });
     } catch (error) {
       next(error);
     }
@@ -1074,21 +1377,31 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
         error: {
           code: error.code,
           message: error.message,
-          details: {
-            ...(error.details && typeof error.details === "object" ? error.details : {}),
-            recovery: guidance.recommendedNextCall
-          }
+          details: error.details && typeof error.details === "object" ? error.details : {},
+          expectedShape: "See /v1/agent/schema",
+          badField: error.details && typeof error.details === "object" ? (error.details as Record<string, unknown>).badField ?? null : null,
+          exampleFix: error.details && typeof error.details === "object" ? (error.details as Record<string, unknown>).exampleFix ?? null : null,
+          recoveryHint: guidance.recommendedNextCall
         }
       });
       return;
     }
     if (error instanceof z.ZodError) {
+      const flattened = z.flattenError(error);
+      const firstField = Object.keys(flattened.fieldErrors)[0] ?? null;
       res.status(400).json({
         ok: false,
         error: {
           code: "invalid_request",
           message: "Validation failed",
-          details: z.treeifyError(error)
+          details: z.treeifyError(error),
+          expectedShape: "See /v1/agent/schema",
+          badField: firstField,
+          exampleFix: { path: "Service/Folder/Script" },
+          recoveryHint: {
+            endpoint: "/v1/agent/schema",
+            payloadTemplate: {}
+          }
         }
       });
       return;
@@ -1099,4 +1412,3 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
 
   return app;
 }
-

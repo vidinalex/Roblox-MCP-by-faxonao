@@ -1,13 +1,53 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v4";
+import { buildAgentSchemaDocument, getAgentContractByEndpointPath, parsePublicContractPayload } from "../bridge/agentContract.js";
 import { BridgeService } from "../bridge/bridgeService.js";
 import { BridgeError } from "../lib/errors.js";
+import { serializePublicPayload } from "../lib/publicContract.js";
 import { ContentLengthStdioTransport } from "./contentLengthStdioTransport.js";
 
 function textResult(payload: unknown): { content: [{ type: "text"; text: string }] } {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
   };
+}
+
+async function runTool(
+  bridge: BridgeService,
+  endpoint: string,
+  toolName: string,
+  payload: Record<string, unknown>,
+  execute: (normalizedPayload: Record<string, unknown>, trace: ReturnType<BridgeService["createTrace"]>) => Promise<unknown>
+): Promise<{ content: [{ type: "text"; text: string }] }> {
+  const requestId = randomUUID();
+  const trace = bridge.createTrace(requestId, "mcp", endpoint, toolName);
+  try {
+    trace.setPayload(serializePublicPayload(payload));
+    const normalized = parsePublicContractPayload(getAgentContractByEndpointPath(endpoint)!.id, payload);
+    trace.setPayload(serializePublicPayload(normalized));
+    const result = await execute(normalized, trace);
+    const body = serializePublicPayload({ requestId, ...((result as Record<string, unknown>) ?? {}), ok: true });
+    trace.finishOk(body);
+    return textResult(body);
+  } catch (error) {
+    const body = serializePublicPayload({
+      ok: false,
+      requestId,
+      error: error instanceof BridgeError
+        ? {
+            code: error.code,
+            message: error.message,
+            details: error.details ?? null
+          }
+        : {
+            code: "internal",
+            message: error instanceof Error ? error.message : String(error)
+          }
+    });
+    trace.finishError(body);
+    return textResult(body);
+  }
 }
 
 const scriptPatchOpSchema = z.discriminatedUnion("op", [
@@ -46,6 +86,15 @@ export function createMcpServer(bridge: BridgeService): McpServer {
   });
 
   server.registerTool(
+    "rbx_schema",
+    {
+      description: "Return the machine-readable RBXMCP HTTP/MCP contract schema.",
+      inputSchema: {}
+    },
+    async () => textResult({ requestId: randomUUID(), ...buildAgentSchemaDocument() })
+  );
+
+  server.registerTool(
     "rbx_list_scripts",
     {
       description: "List cached Roblox Lua scripts. If cache is empty, triggers full snapshot from Studio.",
@@ -66,26 +115,66 @@ export function createMcpServer(bridge: BridgeService): McpServer {
     {
       description: "Get script source by full Roblox path (path[0] must be service).",
       inputSchema: {
-        path: z.array(z.string().min(1)).min(2),
+        path: z.string().min(3),
         forceRefresh: z.boolean().optional(),
         maxAgeMs: z.number().int().min(0).max(3_600_000).optional()
       }
     },
-    async ({ path, forceRefresh, maxAgeMs }) => {
-      const read = await bridge.readScript(path, { forceRefresh, maxAgeMs });
-      const script = read.script;
-      return textResult({
-        path: script.path,
-        source: script.source,
-        hash: script.hash,
-        updatedAt: script.updatedAt,
-        draftAware: script.draftAware,
-        readChannel: script.readChannel,
-        fromCache: read.fromCache,
-        cacheAgeMs: read.cacheAgeMs,
-        refreshedBeforeRead: read.refreshedBeforeRead
-      });
-    }
+    async ({ path, forceRefresh, maxAgeMs }) =>
+      runTool(bridge, "/v1/agent/get_script", "rbx_get_script", { path, forceRefresh, maxAgeMs }, async (normalized) => {
+        const read = await bridge.readScript(normalized.path, { forceRefresh: normalized.forceRefresh, maxAgeMs: normalized.maxAgeMs });
+        const script = read.script;
+        return {
+          path: script.path,
+          source: script.source,
+          hash: script.hash,
+          updatedAt: script.updatedAt,
+          draftAware: script.draftAware,
+          readChannel: script.readChannel,
+          tags: script.tags,
+          attributes: script.attributes,
+          fromCache: read.fromCache,
+          cacheAgeMs: read.cacheAgeMs,
+          refreshedBeforeRead: read.refreshedBeforeRead
+        };
+      })
+  );
+
+  server.registerTool(
+    "rbx_get_script_metadata",
+    {
+      description: "Get lightweight metadata for one script without returning full source.",
+      inputSchema: {
+        path: z.string().min(3),
+        forceRefresh: z.boolean().optional(),
+        maxAgeMs: z.number().int().min(0).max(3_600_000).optional()
+      }
+    },
+    async ({ path, forceRefresh, maxAgeMs }) =>
+      runTool(bridge, "/v1/agent/get_script_metadata", "rbx_get_script_metadata", { path, forceRefresh, maxAgeMs }, async (normalized) =>
+        bridge.getScriptMetadata(normalized.path, { forceRefresh: normalized.forceRefresh, maxAgeMs: normalized.maxAgeMs })
+      )
+  );
+
+  server.registerTool(
+    "rbx_get_scripts",
+    {
+      description: "Bulk-read multiple scripts with optional source inclusion.",
+      inputSchema: {
+        paths: z.array(z.string().min(3)).min(1).max(200),
+        includeSource: z.boolean().optional(),
+        forceRefresh: z.boolean().optional(),
+        maxAgeMs: z.number().int().min(0).max(3_600_000).optional()
+      }
+    },
+    async ({ paths, includeSource, forceRefresh, maxAgeMs }) =>
+      runTool(bridge, "/v1/agent/get_scripts", "rbx_get_scripts", { paths, includeSource, forceRefresh, maxAgeMs }, async (normalized) =>
+        bridge.getScripts(normalized.paths, {
+          includeSource: normalized.includeSource,
+          forceRefresh: normalized.forceRefresh,
+          maxAgeMs: normalized.maxAgeMs
+        })
+      )
   );
 
   server.registerTool(
@@ -103,7 +192,9 @@ export function createMcpServer(bridge: BridgeService): McpServer {
         hash: script.hash,
         updatedAt: script.updatedAt,
         draftAware: script.draftAware,
-        readChannel: script.readChannel
+        readChannel: script.readChannel,
+        tags: script.tags,
+        attributes: script.attributes
       });
     }
   );
@@ -114,46 +205,81 @@ export function createMcpServer(bridge: BridgeService): McpServer {
       description:
         "Hash-locked update. Always refreshes target script before write. Rejects if expectedHash mismatches current Studio hash.",
       inputSchema: {
-        path: z.array(z.string().min(1)).min(2),
+        path: z.string().min(3),
         newSource: z.string(),
         expectedHash: z.string().min(1),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ path, newSource, expectedHash, placeId }) => {
-      const updated = await bridge.updateScript(path, newSource, expectedHash, placeId);
-      return textResult({
-        path: updated.path,
-        hash: updated.hash,
-        updatedAt: updated.updatedAt,
-        draftAware: updated.draftAware,
-        readChannel: updated.readChannel
-      });
-    }
+    async ({ path, newSource, expectedHash, placeId }) =>
+      runTool(bridge, "/v1/agent/update_script", "rbx_update_script", { path, newSource, expectedHash, placeId }, async (normalized, trace) => {
+        const updated = await bridge.updateScript(normalized.path, normalized.newSource, normalized.expectedHash, normalized.placeId, trace);
+        return {
+          path: updated.path,
+          hash: updated.hash,
+          updatedAt: updated.updatedAt,
+          draftAware: updated.draftAware,
+          readChannel: updated.readChannel,
+          tags: updated.tags,
+          attributes: updated.attributes
+        };
+      })
   );
 
   server.registerTool(
     "rbx_create_script",
     {
-      description: "Create script only if missing (no overwrite).",
+      description: "Create script only if missing (no overwrite). Heavy writes should not be waited on for more than 30 seconds without checking request trace.",
       inputSchema: {
-        path: z.array(z.string().min(1)).min(2),
+        path: z.string().min(3),
         className: z.enum(["Script", "LocalScript", "ModuleScript"]).default("LocalScript"),
         source: z.string().default(""),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ path, className, source, placeId }) => {
-      const created = await bridge.createScript(path, className, source, placeId);
-      return textResult({
-        path: created.path,
-        className: created.className,
-        hash: created.hash,
-        updatedAt: created.updatedAt,
-        draftAware: created.draftAware,
-        readChannel: created.readChannel
-      });
-    }
+    async ({ path, className, source, placeId }) =>
+      runTool(bridge, "/v1/agent/create_script", "rbx_create_script", { path, className, source, placeId }, async (normalized, trace) => {
+        const created = await bridge.createScript(normalized.path, normalized.className, normalized.source, normalized.placeId, trace);
+        return {
+          path: created.path,
+          className: created.className,
+          hash: created.hash,
+          updatedAt: created.updatedAt,
+          draftAware: created.draftAware,
+          readChannel: created.readChannel,
+          tags: created.tags,
+          attributes: created.attributes
+        };
+      })
+  );
+
+  server.registerTool(
+    "rbx_update_script_metadata",
+    {
+      description: "Hash-locked script tag/attribute update without changing source.",
+      inputSchema: {
+        path: z.string().min(3),
+        expectedHash: z.string().min(1),
+        addTags: z.array(z.string().min(1)).optional(),
+        removeTags: z.array(z.string().min(1)).optional(),
+        attributes: z.record(z.string(), z.unknown()).optional(),
+        clearAttributes: z.array(z.string()).optional(),
+        placeId: z.string().min(1).optional()
+      }
+    },
+    async ({ path, expectedHash, addTags, removeTags, attributes, clearAttributes, placeId }) =>
+      runTool(bridge, "/v1/agent/update_script_metadata", "rbx_update_script_metadata", { path, expectedHash, addTags, removeTags, attributes, clearAttributes, placeId }, async (normalized, trace) => {
+        const updated = await bridge.updateScriptMetadata(normalized.path, normalized.expectedHash, normalized, normalized.placeId, trace);
+        return {
+          path: updated.path,
+          hash: updated.hash,
+          updatedAt: updated.updatedAt,
+          draftAware: updated.draftAware,
+          readChannel: updated.readChannel,
+          tags: updated.tags,
+          attributes: updated.attributes
+        };
+      })
   );
 
   server.registerTool(
@@ -249,18 +375,49 @@ export function createMcpServer(bridge: BridgeService): McpServer {
   );
 
   server.registerTool(
+    "rbx_validate_payload",
+    {
+      description: "Validate a public RBXMCP endpoint payload against the machine-readable contract.",
+      inputSchema: {
+        endpoint: z.string().min(1),
+        payload: z.record(z.string(), z.unknown())
+      }
+    },
+    async ({ endpoint, payload }) =>
+      runTool(bridge, "/v1/agent/validate_payload", "rbx_validate_payload", { endpoint, payload }, async (normalized) => {
+        const match = getAgentContractByEndpointPath(String(normalized.endpoint));
+        if (!match) {
+          throw new BridgeError("invalid_request", `Unknown endpoint for validation: ${normalized.endpoint}`, 400);
+        }
+        return {
+          valid: true,
+          endpoint: normalized.endpoint,
+          normalizedPayload: parsePublicContractPayload(match.id, normalized.payload),
+          issues: [],
+          exampleFix: match.contract.examples[0] ?? null
+        };
+      })
+  );
+
+  server.registerTool(
     "rbx_apply_script_patch",
     {
       description: "Apply structured script patch ops through the existing hash-locked update flow.",
       inputSchema: {
-        path: z.array(z.string().min(1)).min(2),
+        path: z.string().min(3),
         expectedHash: z.string().min(1),
         patch: z.array(scriptPatchOpSchema).min(1),
+        dryRun: z.boolean().optional(),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ path, expectedHash, patch, placeId }) =>
-      textResult(await bridge.applyScriptPatch(path, expectedHash, patch, placeId))
+    async ({ path, expectedHash, patch, dryRun, placeId }) =>
+      runTool(bridge, "/v1/agent/apply_script_patch", "rbx_apply_script_patch", { path, expectedHash, patch, dryRun, placeId }, async (normalized, trace) =>
+        bridge.applyScriptPatch(normalized.path, normalized.expectedHash, normalized.patch, normalized.placeId, {
+          dryRun: normalized.dryRun,
+          trace
+        })
+      )
   );
 
   server.registerTool(
@@ -690,6 +847,27 @@ export function createMcpServer(bridge: BridgeService): McpServer {
   );
 
   server.registerTool(
+    "rbx_update_ui_metadata",
+    {
+      description: "Version-locked UI tag/attribute update.",
+      inputSchema: {
+        path: z.string().min(3),
+        expectedVersion: z.string().min(1),
+        addTags: z.array(z.string().min(1)).optional(),
+        removeTags: z.array(z.string().min(1)).optional(),
+        attributes: z.record(z.string(), z.unknown()).optional(),
+        clearAttributes: z.array(z.string()).optional(),
+        placeId: z.string().min(1).optional()
+      }
+    },
+    async ({ path, expectedVersion, addTags, removeTags, attributes, clearAttributes, placeId }) =>
+      runTool(bridge, "/v1/agent/update_ui_metadata", "rbx_update_ui_metadata", { path, expectedVersion, addTags, removeTags, attributes, clearAttributes, placeId }, async (normalized) => {
+        const node = await bridge.updateUiMetadata(normalized.path, normalized.expectedVersion, normalized, normalized.placeId);
+        return { node, version: node.version, updatedAt: node.updatedAt };
+      })
+  );
+
+  server.registerTool(
     "rbx_create_ui",
     {
       description: "Create a UI child under parent path if it does not already exist.",
@@ -698,12 +876,14 @@ export function createMcpServer(bridge: BridgeService): McpServer {
         className: z.string().min(1),
         name: z.string().min(1),
         props: z.record(z.string(), z.unknown()).optional(),
+        tags: z.array(z.string().min(1)).optional(),
+        attributes: z.record(z.string(), z.unknown()).optional(),
         index: z.number().int().min(0).optional(),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ parentPath, className, name, props, index, placeId }) => {
-      const node = await bridge.createUi(parentPath, className, name, props ?? {}, index, placeId);
+    async ({ parentPath, className, name, props, tags, attributes, index, placeId }) => {
+      const node = await bridge.createUi(parentPath, className, name, props ?? {}, index, placeId, { tags, attributes });
       return textResult({ node, version: node.version, updatedAt: node.updatedAt });
     }
   );
@@ -748,10 +928,41 @@ export function createMcpServer(bridge: BridgeService): McpServer {
       inputSchema: {
         cursor: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
-        minLevel: z.enum(["info", "warn", "error"]).optional()
+        minLevel: z.enum(["info", "warn", "error"]).optional(),
+        requestId: z.string().optional(),
+        sinceTime: z.string().optional(),
+        untilTime: z.string().optional()
       }
     },
-    async ({ cursor, limit, minLevel }) => textResult(bridge.getLogs(cursor, limit, minLevel))
+    async ({ cursor, limit, minLevel, requestId, sinceTime, untilTime }) =>
+      runTool(bridge, "/v1/agent/get_logs", "rbx_get_logs", { cursor, limit, minLevel, requestId, sinceTime, untilTime }, async (normalized) =>
+        bridge.getLogs(
+          normalized.cursor,
+          normalized.limit,
+          normalized.minLevel,
+          typeof normalized.requestId === "string" ? normalized.requestId : undefined,
+          typeof normalized.sinceTime === "string" ? normalized.sinceTime : undefined,
+          typeof normalized.untilTime === "string" ? normalized.untilTime : undefined
+        )
+      )
+  );
+
+  server.registerTool(
+    "rbx_get_request_trace",
+    {
+      description: "Return the stored request trace for one requestId.",
+      inputSchema: {
+        requestId: z.string().min(1)
+      }
+    },
+    async ({ requestId }) =>
+      runTool(bridge, "/v1/agent/get_request_trace", "rbx_get_request_trace", { requestId }, async (normalized) => {
+        const trace = bridge.getRequestTrace(String(normalized.requestId));
+        if (!trace) {
+          throw new BridgeError("not_found", `Request trace not found: ${normalized.requestId}`, 404, { requestId: normalized.requestId });
+        }
+        return { trace };
+      })
   );
 
   return server;
@@ -761,6 +972,3 @@ export async function connectMcpStdio(server: McpServer): Promise<void> {
   const transport = new ContentLengthStdioTransport();
   await server.connect(transport);
 }
-
-
-

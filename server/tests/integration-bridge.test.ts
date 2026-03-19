@@ -189,12 +189,6 @@ describe("bridge integration", () => {
     const expectedHash = sourceHash(studioSource);
     const updatePromise = bridge.updateScript(path, "print('new')", expectedHash);
 
-    const refreshBeforeWrite = await pollOne(api, sessionId);
-    expect(refreshBeforeWrite.type).toBe("snapshot_script_by_path");
-    expect(refreshBeforeWrite.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshBeforeWrite.commandId);
-
     const writeCommand = await pollOne(api, sessionId);
     expect(writeCommand.type).toBe("set_script_source_if_hash");
     expect(writeCommand.timeoutMs).toBe(45_000);
@@ -204,14 +198,14 @@ describe("bridge integration", () => {
       Buffer.from("print('new')", "utf8").toString("base64")
     );
     studioSource = writePayload.newSource;
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, writeCommand.commandId, { writeChannel: "editor", draftAware: true });
-
-    const refreshAfterWrite = await pollOne(api, sessionId);
-    expect(refreshAfterWrite.type).toBe("snapshot_script_by_path");
-    expect(refreshAfterWrite.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshAfterWrite.commandId);
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
 
     const updated = await updatePromise;
     expect(updated.source).toBe("print('new')");
@@ -250,12 +244,14 @@ describe("bridge integration", () => {
       () => null,
       (error: Error) => error
     );
-    const refresh = await pollOne(api, sessionId);
-    expect(refresh.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh.commandId);
+    const write = await pollOne(api, sessionId);
+    expect(write.type).toBe("set_script_source_if_hash");
+    await completeError(api, sessionId, write.commandId, "hash_conflict", "Hash mismatch in Studio", {
+      expectedHash: sourceHash("print('stale')"),
+      currentHash: sourceHash(studioSource)
+    });
 
-    expect((await updateError)?.message).toMatch(/Hash mismatch before write/);
+    expect((await updateError)?.message).toMatch(/Hash mismatch in Studio/);
 
     const pollAfter = await api.post("/v1/studio/poll").send({ sessionId, waitMs: 100 });
     expect(pollAfter.status).toBe(200);
@@ -282,28 +278,26 @@ describe("bridge integration", () => {
       () => null,
       (error: Error) => error
     );
-    const refreshForConflict = await pollOne(api, sessionId);
-    expect(refreshForConflict.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshForConflict.commandId);
-    expect((await staleError)?.message).toMatch(/Hash mismatch before write/);
+    const writeForConflict = await pollOne(api, sessionId);
+    expect(writeForConflict.type).toBe("set_script_source_if_hash");
+    await completeError(api, sessionId, writeForConflict.commandId, "hash_conflict", "Hash mismatch in Studio", {
+      expectedHash: sourceHash("warn(43)"),
+      currentHash: sourceHash(studioSource)
+    });
+    expect((await staleError)?.message).toMatch(/Hash mismatch in Studio/);
 
     const freshUpdate = bridge.updateScript(path, "warn(1014)", sourceHash("warn(999)"));
-    const refreshBeforeWrite = await pollOne(api, sessionId);
-    expect(refreshBeforeWrite.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshBeforeWrite.commandId);
-
     const writeCommand = await pollOne(api, sessionId);
     expect(writeCommand.type).toBe("set_script_source_if_hash");
     studioSource = "warn(1014)";
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, writeCommand.commandId, { writeChannel: "editor", draftAware: true });
-
-    const refreshAfterWrite = await pollOne(api, sessionId);
-    expect(refreshAfterWrite.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshAfterWrite.commandId);
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
 
     const updated = await freshUpdate;
     expect(updated.source).toBe("warn(1014)");
@@ -327,10 +321,6 @@ describe("bridge integration", () => {
       () => null,
       (error: Error) => error
     );
-    const refresh = await pollOne(api, sessionId);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh.commandId);
-
     const writeCommand = await pollOne(api, sessionId);
     expect(writeCommand.type).toBe("set_script_source_if_hash");
     const writeResult = await api.post("/v1/studio/result").send({
@@ -369,10 +359,6 @@ describe("bridge integration", () => {
       () => null,
       (error: Error) => error
     );
-    const refresh = await pollOne(api, sessionId);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh.commandId);
-
     const writeCommand = await pollOne(api, sessionId);
     expect(writeCommand.type).toBe("set_script_source_if_hash");
     expect(writeCommand.timeoutMs).toBe(45_000);
@@ -390,6 +376,83 @@ describe("bridge integration", () => {
     expect((await updateError)?.message).toMatch(/unexpected nil dereference/);
   });
 
+  it("verifies multiline update readback before reporting success", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ServerScriptService", "MainScript"];
+    let studioSource = "local value = 1\nreturn value\n";
+
+    const listPromise = bridge.listScripts();
+    const snapshotAll = await pollOne(api, sessionId);
+    await pushPartial(api, sessionId, path, studioSource, "all");
+    await complete(api, sessionId, snapshotAll.commandId, { count: 1 });
+    await listPromise;
+
+    const nextSource = "local value = 2\nreturn value\n";
+    const updatePromise = bridge.updateScript(path, nextSource, sourceHash(studioSource));
+
+    const writeCommand = await pollOne(api, sessionId);
+    expect(writeCommand.type).toBe("set_script_source_if_hash");
+    studioSource = nextSource;
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+
+    const verifyRefresh = await pollOne(api, sessionId);
+    expect(verifyRefresh.type).toBe("snapshot_script_by_path");
+    await pushPartial(api, sessionId, path, studioSource);
+    await complete(api, sessionId, verifyRefresh.commandId);
+
+    const updated = await updatePromise;
+    expect(updated.source).toBe(studioSource);
+    expect(updated.hash).toBe(sourceHash(studioSource));
+  });
+
+  it("returns write_verification_failed when multiline readback differs after update", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ServerScriptService", "MainScript"];
+    const studioSource = "local value = 1\nreturn value\n";
+
+    const listPromise = bridge.listScripts();
+    const snapshotAll = await pollOne(api, sessionId);
+    await pushPartial(api, sessionId, path, studioSource, "all");
+    await complete(api, sessionId, snapshotAll.commandId, { count: 1 });
+    await listPromise;
+
+    const nextSource = "local value = 2\nreturn value\n";
+    const updatePromise = bridge.updateScript(path, nextSource, sourceHash(studioSource));
+    const updateError = updatePromise.then(
+      () => null,
+      (error: Error) => error as Error & { code?: string; details?: Record<string, unknown> }
+    );
+
+    const writeCommand = await pollOne(api, sessionId);
+    expect(writeCommand.type).toBe("set_script_source_if_hash");
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(nextSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+
+    const verifyRefresh = await pollOne(api, sessionId);
+    expect(verifyRefresh.type).toBe("snapshot_script_by_path");
+    await pushPartial(api, sessionId, path, "local value = 2 return value ");
+    await complete(api, sessionId, verifyRefresh.commandId);
+
+    const error = await updateError;
+    expect(error?.message).toMatch(/Written script content differed after save/);
+    expect(error?.code).toBe("write_verification_failed");
+  });
+
   it("handles multiple sequential updates of the same script", async () => {
     const { api, bridge } = await createContext();
     const sessionId = await hello(api);
@@ -404,36 +467,32 @@ describe("bridge integration", () => {
     expect(listed[0].hash).toBe(sourceHash(studioSource));
 
     const update1 = bridge.updateScript(path, "print('v2')", sourceHash(studioSource));
-    const refresh1a = await pollOne(api, sessionId);
-    expect(refresh1a.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh1a.commandId);
     const write1 = await pollOne(api, sessionId);
     expect(write1.timeoutMs).toBe(45_000);
     studioSource = (write1.payload as { newSource: string }).newSource;
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, write1.commandId, { writeChannel: "editor", draftAware: true });
-    const refresh1b = await pollOne(api, sessionId);
-    expect(refresh1b.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh1b.commandId);
+    await complete(api, sessionId, write1.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
     const done1 = await update1;
     expect(done1.hash).toBe(sourceHash("print('v2')"));
 
     const update2 = bridge.updateScript(path, "print('v3')", done1.hash);
-    const refresh2a = await pollOne(api, sessionId);
-    expect(refresh2a.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh2a.commandId);
     const write2 = await pollOne(api, sessionId);
     expect(write2.timeoutMs).toBe(45_000);
     studioSource = (write2.payload as { newSource: string }).newSource;
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, write2.commandId, { writeChannel: "editor", draftAware: true });
-    const refresh2b = await pollOne(api, sessionId);
-    expect(refresh2b.timeoutMs).toBe(30_000);
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refresh2b.commandId);
+    await complete(api, sessionId, write2.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
     const done2 = await update2;
     expect(done2.hash).toBe(sourceHash("print('v3')"));
     expect(done2.source).toBe("print('v3')");
@@ -469,21 +528,14 @@ describe("bridge integration", () => {
     expect(response.body.operations.agentHttp).toContain("POST /v1/agent/apply_ui_batch");
     expect(response.body.operations.agentHttp).toContain("POST /v1/agent/clone_ui_subtree");
     expect(response.body.operations.agentHttp).toContain("POST /v1/agent/apply_ui_template");
-    expect(response.body.contracts.updateScript.required).toEqual(["path", "newSource", "expectedHash"]);
-    expect(response.body.contracts.getProjectSummary.optional).toEqual(["scope", "service", "verbosity"]);
-    expect(response.body.contracts.getRelatedContext.required).toEqual(["target"]);
-    expect(response.body.contracts.getUiSummary.required).toEqual(["path"]);
-    expect(response.body.contracts.getUiSummary.optional).toEqual(["forceRefresh", "maxAgeMs", "verbosity"]);
-    expect(response.body.contracts.deleteScript.required).toEqual(["path", "expectedHash"]);
-    expect(response.body.contracts.moveScript.required).toEqual(["path", "newParentPath", "expectedHash"]);
-    expect(response.body.contracts.getUiLayoutSnapshot.required).toEqual(["path"]);
-    expect(response.body.contracts.validateUiLayout.required).toEqual(["path"]);
-    expect(response.body.contracts.validateUiLayout.optional).toEqual(["forceRefresh", "maxAgeMs", "verbosity"]);
-    expect(response.body.contracts.findUiBindings.required).toEqual(["target"]);
-    expect(response.body.contracts.explainError.required).toEqual(["code"]);
-    expect(response.body.contracts.validateOperation.required).toEqual(["kind", "payload"]);
-    expect(response.body.contracts.applyScriptPatch.required).toEqual(["path", "expectedHash", "patch"]);
-    expect(response.body.contracts.diffScript.required).toEqual(["path"]);
+    expect(response.body.contract.schemaUrl).toBe("/v1/agent/schema");
+    expect(response.body.contract.modelWaitPolicy.maxSyncWaitMs).toBe(30_000);
+    expect(response.body.contract.aliases.recommendedMaxSyncWaitMs).toBe("30000");
+    expect(response.body.contract.contracts.update_script.aliases.pathType).toBe("string");
+    expect(response.body.contract.contracts.update_script.aliases.recommendedMaxSyncWaitMs).toBe("30000");
+    expect(response.body.contract.contracts.apply_script_patch.aliases.patchType).toBe("array<op>");
+    expect(response.body.contract.contracts.create_script.gotchas).toContain("Do not wait longer than 30 seconds for heavy operations; use requestId with get_request_trace if still pending.");
+    expect(response.body.contract.contracts.get_related_context.gotchas).toContain("target must be an object.");
     expect(response.body.contracts.findEntrypoints.optional).toEqual(["query", "service", "limit", "verbosity"]);
     expect(response.body.contracts.findRemotes.optional).toEqual(["query", "limit", "verbosity"]);
     expect(response.body.contracts.rankFilesByRelevance.required).toEqual(["query"]);
@@ -512,6 +564,7 @@ describe("bridge integration", () => {
     expect(response.body.ui.preferredMutationMode).toBe("batch");
     expect(response.body.preferredBootstrapCalls).toEqual([
       "GET /v1/agent/capabilities",
+      "GET /v1/agent/schema",
       "POST /v1/agent/health",
       "POST /v1/agent/get_project_summary"
     ]);
@@ -522,6 +575,25 @@ describe("bridge integration", () => {
     expect(response.body.recommendedWorkflows.scriptPatchReview[0]).toMatch(/apply_script_patch/);
     expect(response.body.recommendedWorkflows.uiClone[0]).toMatch(/clone_ui_subtree/);
     expect(response.body.recommendedWorkflows.uiTemplate[0]).toMatch(/apply_ui_template/);
+  });
+
+  it("exposes detailed response schemas for agent endpoints", async () => {
+    const { api } = await createContext();
+    const response = await api.get("/v1/agent/schema");
+    expect(response.status).toBe(200);
+    expect(response.body.ok).toBe(true);
+    const getScript = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "get_script");
+    const updateScriptMetadata = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "update_script_metadata");
+    const updateUiMetadata = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "update_ui_metadata");
+    expect(getScript?.responseSchema?.anyOf).toHaveLength(2);
+    expect(getScript.responseSchema.anyOf[0].properties.source.type).toBe("string");
+    expect(getScript.responseSchema.anyOf[0].properties.tags.items.type).toBe("string");
+    expect(updateScriptMetadata?.responseSchema?.anyOf).toHaveLength(2);
+    expect(updateScriptMetadata.responseSchema.anyOf[0].properties.attributes.type).toBe("object");
+    expect(updateScriptMetadata.responseSchema.anyOf[0].required).toEqual(expect.arrayContaining(["path", "hash", "tags", "attributes"]));
+    expect(updateUiMetadata?.responseSchema?.anyOf).toHaveLength(2);
+    expect(updateUiMetadata.responseSchema.anyOf[0].properties.node.$ref).toBeTruthy();
+    expect(updateUiMetadata.responseSchema.$defs.__schema0.properties.children.type).toBe("array");
   });
 
   it("supports bootstrap summary and explain_error over agent facade", async () => {
@@ -679,8 +751,8 @@ describe("bridge integration", () => {
     expect(entrypoints.status).toBe(200);
     expect(
       entrypoints.body.entrypoints.some(
-        (item: { path: string[]; category: string }) =>
-          item.path.join("/") === "ServerScriptService/Bootstrap.server" &&
+        (item: { path: string; category: string }) =>
+          item.path === "ServerScriptService/Bootstrap.server" &&
           (item.category === "server_bootstrap" || item.category === "remote_handler")
       )
     ).toBe(true);
@@ -750,7 +822,7 @@ describe("bridge integration", () => {
     studioSource = "warn(999)";
     const getPromise = api
       .post("/v1/agent/get_script")
-      .send({ path, maxAgeMs: 0 })
+      .send({ path: "ServerScriptService/WarnScript", maxAgeMs: 0 })
       .then((response) => response);
     const refresh = await pollOne(api, sessionId);
     expect(refresh.type).toBe("snapshot_script_by_path");
@@ -779,7 +851,7 @@ describe("bridge integration", () => {
     const createPromise = api
       .post("/v1/agent/create_script")
       .send({
-        path,
+        path: "StarterGui/ExistingScript",
         className: "LocalScript",
         source: "print('new')"
       })
@@ -795,6 +867,55 @@ describe("bridge integration", () => {
     const pollAfter = await api.post("/v1/studio/poll").send({ sessionId, waitMs: 100 });
     expect(pollAfter.body.commands).toHaveLength(0);
   });
+
+  it("creates missing script without post-write refresh for large payload flows", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ReplicatedStorage", "Utils", "GeneratedModule"];
+    const source = "return " + JSON.stringify({ payload: "x".repeat(70_000) });
+
+    const createPromise = api
+      .post("/v1/agent/create_script")
+      .send({
+        path: "ReplicatedStorage/Utils/GeneratedModule",
+        className: "ModuleScript",
+        source
+      })
+      .then((response) => response);
+
+    const preRefresh = await pollOne(api, sessionId);
+    expect(preRefresh.type).toBe("snapshot_script_by_path");
+    await completeError(api, sessionId, preRefresh.commandId, "not_found", "Script not found", { path });
+
+    const upsert = await pollOne(api, sessionId);
+    expect(upsert.type).toBe("upsert_script");
+    await complete(api, sessionId, upsert.commandId, {
+      path,
+      className: "ModuleScript",
+      hash: sourceHash(source),
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+
+    const response = await createPromise;
+    expect(response.status).toBe(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.hash).toBe(sourceHash(source));
+    expect(response.body.requestId).toBeTruthy();
+    expect(response.body.path).toBe("ReplicatedStorage/Utils/GeneratedModule");
+    expect(response.body.source).toBeUndefined();
+    expect(response.body.sourceOmitted).toBe(true);
+    expect(response.body.size).toBe(Buffer.byteLength(source, "utf8"));
+
+    const pollAfter = await api.post("/v1/studio/poll").send({ sessionId, waitMs: 100 });
+    expect(pollAfter.body.commands).toHaveLength(0);
+
+    const stored = await bridge.getScript(path);
+    expect(stored.source).toBe(source);
+    expect(stored.hash).toBe(sourceHash(source));
+    expect(stored.readChannel).toBe("editor");
+  }, 10_000);
 
   it("rejects hello when RBXMCP_EXPECT_PLACE_ID mismatches", async () => {
     const { api } = await createContext({ expectedPlaceId: "expected-place" });
@@ -812,7 +933,7 @@ describe("bridge integration", () => {
     const { api } = await createContext();
     const sessionId = await hello(api);
     const response = await api.post("/v1/agent/update_script").send({
-      path: ["ServerScriptService", "MainScript"],
+      path: "ServerScriptService/MainScript",
       newSource: "print('x')",
       expectedHash: "abc",
       placeId: "other-place"
@@ -847,12 +968,14 @@ describe("bridge integration", () => {
       .then((response) => response);
     const upsertCommand = await pollOne(enabled.api, sessionId);
     expect(upsertCommand.type).toBe("upsert_script");
-    await pushPartial(enabled.api, sessionId, path, source);
-    await complete(enabled.api, sessionId, upsertCommand.commandId, { writeChannel: "editor" });
-    const refresh = await pollOne(enabled.api, sessionId);
-    expect(refresh.type).toBe("snapshot_script_by_path");
-    await pushPartial(enabled.api, sessionId, path, source);
-    await complete(enabled.api, sessionId, refresh.commandId);
+    await complete(enabled.api, sessionId, upsertCommand.commandId, {
+      path,
+      className: "LocalScript",
+      hash: sourceHash(source),
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
     const allowed = await upsertPromise;
     expect(allowed.status).toBe(200);
     expect(allowed.body.ok).toBe(true);
@@ -1026,7 +1149,7 @@ describe("bridge integration", () => {
     await warm;
 
     const response = await api.post("/v1/agent/get_ui_summary").send({
-      path: ["StarterGui", "MainGui"],
+      path: "StarterGui/MainGui",
       forceRefresh: false
     });
     expect(response.status).toBe(200);
@@ -1043,7 +1166,7 @@ describe("bridge integration", () => {
 
     const responsePromise = api
       .post("/v1/agent/get_ui_tree")
-      .send({ path, forceRefresh: true })
+      .send({ path: "ReplicatedFirst/Screens/TimeRewardsScreen/Templates", forceRefresh: true })
       .then((response) => response);
 
     const warm = await pollOne(api, sessionId);
@@ -1100,7 +1223,7 @@ describe("bridge integration", () => {
     const responsePromise = api
       .post("/v1/agent/create_ui")
       .send({
-        parentPath: ["StarterGui", "MainGui"],
+        parentPath: "StarterGui/MainGui",
         className: "Folder",
         name: "Templates"
       })
@@ -1169,7 +1292,7 @@ describe("bridge integration", () => {
     const responsePromise = api
       .post("/v1/agent/create_ui")
       .send({
-        parentPath: ["ReplicatedFirst", "Screens", "TimeRewardsScreen"],
+        parentPath: "ReplicatedFirst/Screens/TimeRewardsScreen",
         className: "Frame",
         name: "Templates"
       })
@@ -1228,18 +1351,18 @@ describe("bridge integration", () => {
     const responsePromise = api
       .post("/v1/agent/apply_ui_batch")
       .send({
-        rootPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
         expectedVersion: "ui-root-v1",
         operations: [
           {
             op: "create_node",
-            parentPath: ["StarterGui", "MainGui"],
+            parentPath: "StarterGui/MainGui",
             className: "Frame",
             name: "Templates"
           },
           {
             op: "update_props",
-            path: ["StarterGui", "MainGui"],
+            path: "StarterGui/MainGui",
             props: { IgnoreGuiInset: true }
           }
         ]
@@ -1311,12 +1434,12 @@ describe("bridge integration", () => {
     const responsePromise = api
       .post("/v1/agent/apply_ui_batch")
       .send({
-        rootPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
         expectedVersion: "stale-version",
         operations: [
           {
             op: "create_node",
-            parentPath: ["StarterGui", "MainGui"],
+            parentPath: "StarterGui/MainGui",
             className: "Frame",
             name: "Templates"
           }
@@ -1350,7 +1473,7 @@ describe("bridge integration", () => {
     const validate = await api.post("/v1/agent/validate_operation").send({
       kind: "script_patch",
       payload: {
-        path,
+        path: "ServerScriptService/PatchTarget",
         expectedHash: originalHash,
         patch: [{ op: "replace_text", oldText: "value = 1", newText: "value = 2" }]
       }
@@ -1361,7 +1484,7 @@ describe("bridge integration", () => {
     const applyPromise = api
       .post("/v1/agent/apply_script_patch")
       .send({
-        path,
+        path: "ServerScriptService/PatchTarget",
         expectedHash: originalHash,
         patch: [{ op: "replace_text", oldText: "value = 1", newText: "value = 2" }]
       })
@@ -1372,29 +1495,29 @@ describe("bridge integration", () => {
     await pushPartial(api, sessionId, path, studioSource);
     await complete(api, sessionId, refreshBefore.commandId);
 
-    const refreshBeforeWrite = await pollOne(api, sessionId);
-    expect(refreshBeforeWrite.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshBeforeWrite.commandId);
-
     const write = await pollOne(api, sessionId);
     expect(write.type).toBe("set_script_source_if_hash");
     studioSource = ((write.payload as { newSource: string }).newSource);
     expect(studioSource).toContain("value = 2");
+    await complete(api, sessionId, write.commandId, {
+      path,
+      hash: sourceHash(studioSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+    const verifyRefresh = await pollOne(api, sessionId);
+    expect(verifyRefresh.type).toBe("snapshot_script_by_path");
     await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, write.commandId, { writeChannel: "editor", draftAware: true });
-
-    const refreshAfter = await pollOne(api, sessionId);
-    expect(refreshAfter.type).toBe("snapshot_script_by_path");
-    await pushPartial(api, sessionId, path, studioSource);
-    await complete(api, sessionId, refreshAfter.commandId);
+    await complete(api, sessionId, verifyRefresh.commandId);
 
     const applyResponse = await applyPromise;
     expect(applyResponse.status).toBe(200);
     expect(applyResponse.body.operationsApplied).toBe(1);
     expect(applyResponse.body.hash).toBe(sourceHash(studioSource));
 
-    const diff = await api.post("/v1/agent/diff_script").send({ path, baseHash: originalHash });
+    const diff = await api.post("/v1/agent/diff_script").send({ path: "ServerScriptService/PatchTarget", baseHash: originalHash });
     expect(diff.status).toBe(200);
     expect(diff.body.baseHash).toBe(originalHash);
     expect(diff.body.summary.changedHunks).toBeGreaterThan(0);
@@ -1450,9 +1573,9 @@ describe("bridge integration", () => {
     const clonePromise = api
       .post("/v1/agent/clone_ui_subtree")
       .send({
-        rootPath: ["StarterGui", "MainGui"],
-        sourcePath: ["StarterGui", "MainGui", "TemplateCard"],
-        newParentPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
+        sourcePath: "StarterGui/MainGui/TemplateCard",
+        newParentPath: "StarterGui/MainGui",
         expectedVersion: "ui-root-v1",
         newName: "TemplateCardClone"
       })
@@ -1510,7 +1633,7 @@ describe("bridge integration", () => {
 
     const cloneResponse = await clonePromise;
     expect(cloneResponse.status).toBe(200);
-    expect(cloneResponse.body.clonedPath).toEqual(["StarterGui", "MainGui", "TemplateCardClone"]);
+    expect(cloneResponse.body.clonedPath).toBe("StarterGui/MainGui/TemplateCardClone");
     expect(cloneResponse.body.clonedNode.name).toBe("TemplateCardClone");
     expect(cloneResponse.body.root.version).toBe("ui-root-v2");
   });
@@ -1540,8 +1663,8 @@ describe("bridge integration", () => {
       kind: "ui_template",
       payload: {
         kind: "modal",
-        rootPath: ["StarterGui", "MainGui"],
-        targetPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
+        targetPath: "StarterGui/MainGui",
         expectedVersion: "ui-root-v1",
         options: { name: "RewardModal", title: "Daily Reward" }
       }
@@ -1553,8 +1676,8 @@ describe("bridge integration", () => {
       .post("/v1/agent/apply_ui_template")
       .send({
         kind: "modal",
-        rootPath: ["StarterGui", "MainGui"],
-        targetPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
+        targetPath: "StarterGui/MainGui",
         expectedVersion: "ui-root-v1",
         options: { name: "RewardModal", title: "Daily Reward", bodyText: "Claim your gift" }
       })
@@ -1616,8 +1739,8 @@ describe("bridge integration", () => {
       .post("/v1/agent/apply_ui_template")
       .send({
         kind: "shop_grid",
-        rootPath: ["StarterGui", "MainGui"],
-        targetPath: ["StarterGui", "MainGui"],
+        rootPath: "StarterGui/MainGui",
+        targetPath: "StarterGui/MainGui",
         expectedVersion: "ui-root-v2",
         options: {
           name: "ShopGrid",
@@ -2011,11 +2134,11 @@ describe("bridge integration", () => {
     await uiListPromise;
 
     const bindingsResponse = await api.post("/v1/agent/find_ui_bindings").send({
-      target: { uiPath: ["StarterGui", "MainGui", "BuyButton"] }
+      target: { uiPath: "StarterGui/MainGui/BuyButton" }
     });
     expect(bindingsResponse.status).toBe(200);
     expect(bindingsResponse.body.bindings.length).toBeGreaterThan(0);
-    expect(bindingsResponse.body.bindings[0].scriptPath).toEqual(["StarterGui", "MainGui", "ShopController"]);
+    expect(bindingsResponse.body.bindings[0].scriptPath).toBe("StarterGui/MainGui/ShopController");
 
     const remotesResponse = await api.post("/v1/agent/find_remotes").send({
       query: "TradeRequest",
@@ -2217,10 +2340,10 @@ describe("bridge integration", () => {
       verbosity: "minimal"
     });
     expect(symbolContext.status).toBe(200);
-    expect(symbolContext.body.references.some((reference: { path: string[] }) => reference.path.join("/") === "StarterGui/HUD/Logger")).toBe(false);
+    expect(symbolContext.body.references.some((reference: { path: string }) => reference.path === "StarterGui/HUD/Logger")).toBe(false);
 
     const uiSummary = await api.post("/v1/agent/get_ui_summary").send({
-      path: ["StarterGui", "HUD"],
+      path: "StarterGui/HUD",
       verbosity: "minimal"
     });
     expect(uiSummary.status).toBe(200);
@@ -2259,8 +2382,48 @@ describe("bridge integration", () => {
     expect(logsResponse.body.items).toHaveLength(1);
     expect(logsResponse.body.items[0].message).toBe("runtime warning");
   });
+
+  it("keeps healthz responsive while studio poll is waiting", async () => {
+    const { api } = await createContext();
+    const sessionId = await hello(api);
+
+    const pollPromise = api.post("/v1/studio/poll").send({ sessionId, waitMs: 25_000 });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const startedAt = Date.now();
+    const healthResponse = await api.get("/healthz");
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(healthResponse.status).toBe(200);
+    expect(healthResponse.body.ok).toBe(true);
+    expect(elapsedMs).toBeLessThan(1_000);
+
+    const pollResponse = await pollPromise;
+    expect(pollResponse.status).toBe(200);
+    expect(Array.isArray(pollResponse.body.commands)).toBe(true);
+  });
+
+  it("marks stale studio sessions as offline in health", async () => {
+    const { bridge } = await createContext();
+    const session = (bridge as any).sessions.registerHello({
+      clientId: "plugin-1",
+      placeId: "place-123",
+      placeName: "Arena",
+      pluginVersion: "0.1.8",
+      editorApiAvailable: true,
+      base64Transport: true,
+      logCaptureAvailable: true
+    }).session;
+
+    const staleAt = new Date(Date.now() - 20_000).toISOString();
+    session.lastSeenAt = staleAt;
+    session.lastPollAt = staleAt;
+
+    const health = bridge.health();
+    expect(health.studioOnline).toBe(false);
+    expect(health.scriptReadOk).toBe(false);
+    expect(health.scriptWriteOk).toBe(false);
+    expect(health.uiWriteOk).toBe(false);
+    expect(health.session?.stale).toBe(true);
+  });
 });
-
-
-
-

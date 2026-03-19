@@ -9,6 +9,11 @@ interface PendingCommandState {
   timer: NodeJS.Timeout;
 }
 
+export interface EnqueuedCommand {
+  command: BridgeCommand;
+  result: Promise<Record<string, unknown> | undefined>;
+}
+
 export class CommandQueue {
   private activeSessionId: string | null = null;
   private queue: BridgeCommand[] = [];
@@ -36,6 +41,15 @@ export class CommandQueue {
     payload: Record<string, unknown>,
     timeoutMs = 15_000
   ): Promise<Record<string, unknown> | undefined> {
+    const pending = this.enqueueDetailed(type, payload, timeoutMs);
+    return pending.result;
+  }
+
+  enqueueDetailed(
+    type: BridgeCommand["type"],
+    payload: Record<string, unknown>,
+    timeoutMs = 15_000
+  ): EnqueuedCommand {
     if (!this.activeSessionId) {
       throw new BridgeError("studio_offline", "No active Studio session", 503);
     }
@@ -46,7 +60,8 @@ export class CommandQueue {
       type,
       payload,
       createdAt: new Date().toISOString(),
-      timeoutMs
+      timeoutMs,
+      requestId: typeof payload.requestId === "string" ? payload.requestId : undefined
     };
 
     const promise = new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
@@ -59,14 +74,14 @@ export class CommandQueue {
 
     this.queue.push(command);
     this.notifyPollWaiters();
-    return promise;
+    return { command, result: promise };
   }
 
   async poll(sessionId: string, waitMs = 25_000, maxCommands = 1): Promise<BridgeCommand[]> {
     this.assertSession(sessionId);
 
     const readNow = this.dequeueForSession(sessionId, maxCommands);
-    if (readNow.length > 0) {
+    if (readNow.length > 0 || waitMs <= 0) {
       return readNow;
     }
 

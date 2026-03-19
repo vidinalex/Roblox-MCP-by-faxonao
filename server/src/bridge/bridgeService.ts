@@ -2,10 +2,12 @@
 import { UiRetrievalIndex } from "../indexer/uiRetrievalIndex.js";
 import { RetrievalIndex } from "../indexer/retrievalIndex.js";
 import { BridgeError } from "../lib/errors.js";
+import { normalizeSource, sourceHash } from "../lib/hash.js";
 import { normalizePath, pathKey } from "../lib/path.js";
 import { applyScriptPatch, diffLines, validateScriptPatchOps } from "../lib/scriptPatch.js";
 import { CommandQueue } from "./commandQueue.js";
 import { explainBridgeError, recommendedNextStepByError } from "./errorGuidance.js";
+import { RequestTraceStore } from "./requestTraceStore.js";
 import { SessionRegistry } from "./sessionRegistry.js";
 function nowMs() {
     return Date.now();
@@ -24,6 +26,9 @@ const READ_CHANNELS = new Set(["editor", "unknown"]);
 const LOG_LEVELS = new Set(["info", "warn", "error"]);
 const DEFAULT_READ_MAX_AGE_MS = 5_000;
 const LOG_BUFFER_LIMIT = 1_000;
+const MAX_STUDIO_POLL_WAIT_MS = 100;
+const WRITE_VERIFY_MAX_BYTES = 256 * 1024;
+const SESSION_STALE_AFTER_MS = 15_000;
 const COMMAND_TIMEOUTS_MS = {
     default: 15_000,
     snapshot_all_scripts: 90_000,
@@ -67,6 +72,58 @@ function decodeSource(input, inputBase64) {
 function nowIso() {
     return new Date().toISOString();
 }
+function sessionAgeMs(session) {
+    const seenAtMs = typeof session?.lastSeenAt === "string" ? Date.parse(session.lastSeenAt) : Number.NaN;
+    return Number.isFinite(seenAtMs) ? Math.max(0, nowMs() - seenAtMs) : Number.POSITIVE_INFINITY;
+}
+function sourceLineCount(source) {
+    const normalized = normalizeSource(typeof source === "string" ? source : "");
+    if (normalized.length === 0) {
+        return 1;
+    }
+    return normalized.split("\n").length;
+}
+function compactSourcePreview(source, maxLength = 120) {
+    const normalized = normalizeSource(typeof source === "string" ? source : "");
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+function shouldVerifyScriptWrite(source) {
+    if (typeof source !== "string") {
+        return false;
+    }
+    if (Buffer.byteLength(source, "utf8") > WRITE_VERIFY_MAX_BYTES) {
+        return false;
+    }
+    return source.includes("\n") || source.includes("\r");
+}
+function buildWriteVerificationError(path, expectedSource, actualSource) {
+    return new BridgeError("write_verification_failed", `Written script content differed after save: ${path.join("/")}`, 409, {
+        path,
+        expectedHash: sourceHash(expectedSource),
+        currentHash: sourceHash(actualSource),
+        expectedLineCount: sourceLineCount(expectedSource),
+        currentLineCount: sourceLineCount(actualSource),
+        expectedPreview: compactSourcePreview(expectedSource),
+        currentPreview: compactSourcePreview(actualSource)
+    });
+}
+function heavyOperationPolicy() {
+    return {
+        maxSyncWaitMs: 30_000,
+        heavyOperations: [
+            "create_script",
+            "update_script",
+            "apply_script_patch",
+            "apply_ui_batch",
+            "apply_ui_template",
+            "get_project_summary"
+        ],
+        guidance: "For heavy operations, do not wait longer than 30 seconds. Use requestId with get_request_trace or get_logs if the write is still pending."
+    };
+}
 function compactText(input, maxLength = 120) {
     const text = String(input ?? "").replace(/\s+/g, " ").trim();
     if (text.length <= maxLength) {
@@ -83,6 +140,75 @@ function levelPriority(level) {
     }
     return 1;
 }
+function normalizeTagList(input) {
+    if (!Array.isArray(input)) {
+        return [];
+    }
+    const seen = new Set();
+    const out = [];
+    for (const entry of input) {
+        const value = String(entry ?? "").trim();
+        if (!value || seen.has(value)) {
+            continue;
+        }
+        seen.add(value);
+        out.push(value);
+    }
+    return out;
+}
+function normalizeAttributesMap(input) {
+    return typeof input === "object" && input ? { ...input } : {};
+}
+function applyMetadataPatchToTags(currentTags, metadata) {
+    const next = new Set(normalizeTagList(currentTags));
+    for (const tag of normalizeTagList(metadata?.addTags)) {
+        next.add(tag);
+    }
+    for (const tag of normalizeTagList(metadata?.removeTags)) {
+        next.delete(tag);
+    }
+    return [...next].sort();
+}
+function applyMetadataPatchToAttributes(currentAttributes, metadata) {
+    const next = normalizeAttributesMap(currentAttributes);
+    const updates = normalizeAttributesMap(metadata?.attributes);
+    for (const [key, value] of Object.entries(updates)) {
+        next[key] = value;
+    }
+    const clearList = Array.isArray(metadata?.clearAttributes) ? metadata.clearAttributes.map((entry) => String(entry)) : [];
+    for (const key of clearList) {
+        delete next[key];
+    }
+    return next;
+}
+function stableJson(value) {
+    return JSON.stringify(value, (_key, current) => {
+        if (Array.isArray(current)) {
+            return current;
+        }
+        if (current && typeof current === "object") {
+            return Object.keys(current)
+                .sort()
+                .reduce((out, key) => {
+                out[key] = current[key];
+                return out;
+            }, {});
+        }
+        return current;
+    });
+}
+function sameMetadataAttributes(left, right) {
+    return stableJson(normalizeAttributesMap(left)) === stableJson(normalizeAttributesMap(right));
+}
+function buildMetadataVerificationError(kind, path, expectedTags, actualTags, expectedAttributes, actualAttributes) {
+    return new BridgeError("metadata_verification_failed", `${kind} metadata differed after save: ${path.join("/")}`, 409, {
+        path,
+        expectedTags,
+        actualTags,
+        expectedAttributes,
+        actualAttributes
+    });
+}
 function cloneUiNode(node) {
     return {
         path: [...node.path],
@@ -92,6 +218,8 @@ function cloneUiNode(node) {
         version: node.version,
         updatedAt: node.updatedAt,
         props: { ...node.props },
+        tags: [...(node.tags ?? [])],
+        attributes: { ...(node.attributes ?? {}) },
         unsupportedProperties: [...node.unsupportedProperties],
         children: node.children.map((child) => cloneUiNode(child))
     };
@@ -126,6 +254,8 @@ function sanitizeUiNodePayload(input) {
         version: typeof value.version === "string" ? value.version : "",
         updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : nowIso(),
         props: typeof value.props === "object" && value.props ? { ...value.props } : {},
+        tags: normalizeTagList(value.tags),
+        attributes: normalizeAttributesMap(value.attributes),
         unsupportedProperties: Array.isArray(value.unsupportedProperties) ? value.unsupportedProperties.map((entry) => String(entry)) : [],
         children
     };
@@ -152,6 +282,8 @@ function cloneUiOpsFromSubtree(sourceNode, newParentPath, newName) {
             className: node.className,
             name,
             props: { ...node.props },
+            tags: [...(node.tags ?? [])],
+            attributes: { ...(node.attributes ?? {}) },
             index
         });
         node.children.forEach((child, childIndex) => visit(child, nextPath, childIndex));
@@ -439,6 +571,22 @@ function normalizeUiBatchOperation(input) {
             clearProps: Array.isArray(value.clearProps) ? value.clearProps.map((entry) => String(entry)) : []
         };
     }
+    if (op === "update_metadata") {
+        const hasPath = value.path !== undefined;
+        const hasPathRef = typeof value.pathRef === "string" && value.pathRef.trim().length > 0;
+        if (hasPath === hasPathRef) {
+            throw new BridgeError("invalid_ui_operation", "update_metadata requires exactly one of path or pathRef", 400);
+        }
+        return {
+            op,
+            path: hasPath ? normalizePath(value.path) : undefined,
+            pathRef: hasPathRef ? value.pathRef.trim() : undefined,
+            addTags: normalizeTagList(value.addTags),
+            removeTags: normalizeTagList(value.removeTags),
+            attributes: normalizeAttributesMap(value.attributes),
+            clearAttributes: Array.isArray(value.clearAttributes) ? value.clearAttributes.map((entry) => String(entry)) : []
+        };
+    }
     if (op === "create_node") {
         if (typeof value.className !== "string" || typeof value.name !== "string" || value.name.trim() === "") {
             throw new BridgeError("invalid_ui_operation", "create_node requires className and name", 400);
@@ -455,6 +603,8 @@ function normalizeUiBatchOperation(input) {
             className: value.className,
             name: value.name,
             props: typeof value.props === "object" && value.props ? { ...value.props } : {},
+            tags: normalizeTagList(value.tags),
+            attributes: normalizeAttributesMap(value.attributes),
             index: typeof value.index === "number" && Number.isFinite(value.index) ? Math.max(0, Math.trunc(value.index)) : undefined,
             id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : undefined
         };
@@ -566,6 +716,20 @@ function resolveUiOperationRefs(rootPath, operations) {
                 path,
                 props: operation.props ?? {},
                 clearProps: operation.clearProps ?? []
+            };
+            ensureUiOperationWithinRoot(rootPath, concrete);
+            resolved.push(concrete);
+            continue;
+        }
+        if (operation.op === "update_metadata") {
+            const path = resolvePathValue("update_metadata target", operation.path, operation.pathRef);
+            const concrete = {
+                op: "update_metadata",
+                path,
+                addTags: operation.addTags ?? [],
+                removeTags: operation.removeTags ?? [],
+                attributes: operation.attributes ?? {},
+                clearAttributes: operation.clearAttributes ?? []
             };
             ensureUiOperationWithinRoot(rootPath, concrete);
             resolved.push(concrete);
@@ -790,6 +954,7 @@ export class BridgeService {
     logEntries = [];
     logCursorCounter = 0;
     lastLogAt = null;
+    traceStore = new RequestTraceStore();
     constructor(cache, options = {}) {
         this.cache = cache;
         this.index = new RetrievalIndex(cache);
@@ -831,7 +996,7 @@ export class BridgeService {
         if (!session) {
             throw new BridgeError("invalid_session", "Unknown or inactive session", 409);
         }
-        const commands = await this.queue.poll(sessionId, Math.max(100, Math.min(waitMs, 60_000)), 1);
+        const commands = await this.queue.poll(sessionId, Math.max(0, Math.min(waitMs, MAX_STUDIO_POLL_WAIT_MS)), 1);
         return commands;
     }
     async submitResult(sessionId, payload) {
@@ -847,6 +1012,16 @@ export class BridgeService {
             result: payload.result,
             error: payload.error
         });
+        if (!payload.ok && payload.error && typeof payload.error === "object") {
+            payload.error = {
+                ...payload.error,
+                details: {
+                    ...(payload.error.details && typeof payload.error.details === "object" ? payload.error.details : {}),
+                    requestId: command.requestId ?? null,
+                    commandId: command.commandId
+                }
+            };
+        }
         if (payload.ok &&
             (command.type === "set_script_source_if_hash" || command.type === "upsert_script") &&
             payload.result) {
@@ -873,7 +1048,9 @@ export class BridgeService {
                 hash: typeof item.hash === "string" ? item.hash : undefined,
                 source: decodeSource(item.source, item.sourceBase64),
                 draftAware: item.draftAware === true,
-                readChannel: toReadChannel(item.readChannel)
+                readChannel: toReadChannel(item.readChannel),
+                tags: normalizeTagList(item.tags),
+                attributes: normalizeAttributesMap(item.attributes)
             };
         });
         if (payload.mode === "all") {
@@ -919,9 +1096,14 @@ export class BridgeService {
                 level,
                 message: typeof entry.message === "string" ? entry.message : "",
                 source: typeof entry.source === "string" ? entry.source : null,
-                playSessionId: typeof entry.playSessionId === "string" ? entry.playSessionId : null
+                playSessionId: typeof entry.playSessionId === "string" ? entry.playSessionId : null,
+                requestId: typeof entry.requestId === "string" ? entry.requestId : null,
+                commandId: typeof entry.commandId === "string" ? entry.commandId : null
             };
             this.logEntries.push(normalized);
+            if (normalized.requestId) {
+                this.traceStore.noteLog(normalized.requestId, normalized.id);
+            }
             this.lastLogAt = normalized.time;
         }
         if (this.logEntries.length > LOG_BUFFER_LIMIT) {
@@ -930,7 +1112,7 @@ export class BridgeService {
         return payload.entries.length;
     }
     async ensureCacheWarm() {
-        const active = this.sessions.active();
+        const active = this.liveSession();
         if (!active) {
             throw new BridgeError("studio_offline", "Studio is offline", 503);
         }
@@ -944,7 +1126,7 @@ export class BridgeService {
         await this.requestSnapshotAll();
     }
     async ensureUiCacheWarm() {
-        const active = this.sessions.active();
+        const active = this.liveSession();
         if (!active) {
             throw new BridgeError("studio_offline", "Studio is offline", 503);
         }
@@ -990,9 +1172,9 @@ export class BridgeService {
             refreshedBeforeRead
         };
     }
-    async refreshScript(pathInput) {
+    async refreshScript(pathInput, trace: unknown = undefined) {
         const path = normalizePath(pathInput);
-        await this.requestSnapshotByPath(path);
+        await this.requestSnapshotByPath(path, trace);
         const script = await this.cache.getScript(path);
         if (!script) {
             throw new BridgeError("not_found", `Script not found after refresh: ${path.join("/")}`, 404);
@@ -1032,43 +1214,121 @@ export class BridgeService {
         }
         return tree;
     }
-    async updateScript(pathInput, newSource, expectedHash, placeId) {
+    async updateScript(pathInput, newSource, expectedHash, placeId, trace: unknown = undefined) {
         this.assertMutatingPlace(placeId);
         const path = normalizePath(pathInput);
         if (!expectedHash || typeof expectedHash !== "string") {
             throw new BridgeError("invalid_expected_hash", "expectedHash is required", 400);
         }
-        const current = await this.refreshScript(path);
-        if (current.hash !== expectedHash) {
-            throw new BridgeError("hash_conflict", "Hash mismatch before write", 409, {
-                expectedHash,
-                currentHash: current.hash
-            });
+        const active = this.liveSession();
+        if (!active) {
+            throw new BridgeError("studio_offline", "No active Studio session", 503);
         }
-        const active = this.sessions.active();
+        const cachedBefore = await this.cache.getScript(path);
+        trace?.startPhase("pre-refresh", { path: [...path], skipped: true, reason: "plugin_hash_check" });
+        trace?.endPhase("pre-refresh", "ok", { skipped: true, reason: "plugin_hash_check" });
         const useBase64 = active?.base64Transport === true;
-        await this.queue.enqueue("set_script_source_if_hash", {
+        trace?.startPhase("queue-write", { path: [...path] });
+        const queued = this.queue.enqueueDetailed("set_script_source_if_hash", {
             path,
-            expectedHash: current.hash,
+            expectedHash,
             newSource,
-            newSourceBase64: useBase64 ? Buffer.from(newSource, "utf8").toString("base64") : undefined
+            newSourceBase64: useBase64 ? Buffer.from(newSource, "utf8").toString("base64") : undefined,
+            requestId: trace?.requestId
         }, COMMAND_TIMEOUTS_MS.set_script_source_if_hash);
-        // Ensure cache reflects actual Studio state after write.
-        const updated = await this.refreshScript(path);
-        await this.cache.recordChangedItems("script", "script_write", [{ path: updated.path, updatedAt: updated.updatedAt }]);
-        return updated;
+        trace?.noteCommand(queued.command.commandId, queued.command.type);
+        trace?.endPhase("queue-write", "ok", { commandId: queued.command.commandId });
+        trace?.startPhase("plugin-exec", { commandId: queued.command.commandId });
+        let result;
+        try {
+            result = await queued.result;
+            trace?.endPhase("plugin-exec", "ok", { commandId: queued.command.commandId });
+        }
+        catch (error) {
+            trace?.endPhase("plugin-exec", "error", {
+                commandId: queued.command.commandId,
+                code: error instanceof BridgeError ? error.code : "internal"
+            });
+            if (error instanceof BridgeError && error.code === "timeout") {
+                throw new BridgeError("timeout", error.message, error.status, {
+                    ...(error.details && typeof error.details === "object" ? error.details : {}),
+                    requestId: trace?.requestId ?? null,
+                    lastCompletedPhase: "queue-write",
+                    stuckPhase: "plugin-exec",
+                    commandId: queued.command.commandId
+                });
+            }
+            throw error;
+        }
+        const updatedPath = Array.isArray(result?.path) ? normalizePath(result.path) : path;
+        const updated = {
+            path: updatedPath,
+            className: toScriptClass(result?.className ?? cachedBefore?.className ?? "LocalScript"),
+            source: newSource,
+            hash: typeof result?.hash === "string" && result.hash.length > 0 ? result.hash : undefined,
+            draftAware: result?.draftAware === true,
+            readChannel: toReadChannel(result?.readChannel ?? result?.writeChannel ?? cachedBefore?.readChannel),
+            tags: normalizeTagList(result?.tags ?? cachedBefore?.tags),
+            attributes: normalizeAttributesMap(result?.attributes ?? cachedBefore?.attributes)
+        };
+        if (shouldVerifyScriptWrite(newSource)) {
+            trace?.startPhase("post-refresh", { path: [...updated.path], verification: "multiline_integrity_check" });
+            let verified;
+            try {
+                verified = await this.refreshScript(updated.path, trace);
+                if (normalizeSource(verified.source) !== normalizeSource(newSource)) {
+                    throw buildWriteVerificationError(updated.path, newSource, verified.source);
+                }
+                trace?.endPhase("post-refresh", "ok", {
+                    verification: "multiline_integrity_check",
+                    hash: verified.hash
+                });
+            }
+            catch (error) {
+                trace?.endPhase("post-refresh", "error");
+                if (error instanceof BridgeError && error.code === "timeout") {
+                    throw new BridgeError("timeout", error.message, error.status, {
+                        ...(error.details && typeof error.details === "object" ? error.details : {}),
+                        requestId: trace?.requestId ?? null,
+                        lastCompletedPhase: "plugin-exec",
+                        stuckPhase: "post-refresh"
+                    });
+                }
+                throw error;
+            }
+            await this.cache.recordChangedItems("script", "script_write", [{ path: verified.path, updatedAt: verified.updatedAt }]);
+            return verified;
+        }
+        trace?.startPhase("post-refresh", { path: [...updated.path], skipped: true, reason: "cache_updated_from_write_result" });
+        await this.cache.upsertMany(active, [updated]);
+        await this.index.upsertChangedPaths([updated.path]);
+        const stored = await this.cache.getScript(updated.path);
+        trace?.endPhase("post-refresh", "ok", {
+            skipped: true,
+            reason: "cache_updated_from_write_result",
+            hash: updated.hash ?? null
+        });
+        if (!stored) {
+            throw new BridgeError("internal", `Script cache write failed after update: ${updated.path.join("/")}`, 500, { path: updated.path });
+        }
+        await this.cache.recordChangedItems("script", "script_write", [{ path: stored.path, updatedAt: stored.updatedAt }]);
+        return stored;
     }
-    async createScript(pathInput, classNameInput, source, placeId) {
+    async createScript(pathInput, classNameInput, source, placeId, trace: unknown = undefined) {
         this.assertMutatingPlace(placeId);
         const path = normalizePath(pathInput);
         const className = toScriptClass(classNameInput);
+        trace?.startPhase("pre-refresh", { path: [...path], mode: "create_if_missing" });
         try {
-            await this.refreshScript(path);
+            await this.refreshScript(path, trace);
+            trace?.endPhase("pre-refresh", "ok", { exists: true });
         }
         catch (error) {
             if (error instanceof BridgeError && error.code === "not_found") {
-                return this.upsertScript(path, className, source, { placeId });
+                trace?.endPhase("pre-refresh", "ok", { exists: false });
+                return this.upsertScript(path, className, source, { placeId, trace });
             }
+            trace?.endPhase("pre-refresh", "error");
             throw error;
         }
         throw new BridgeError("already_exists", `Script already exists: ${path.join("/")}`, 409, { path });
@@ -1139,25 +1399,141 @@ export class BridgeService {
             source: moved.source,
             hash: moved.hash,
             draftAware: moved.draftAware,
-            readChannel: moved.readChannel
+            readChannel: moved.readChannel,
+            tags: moved.tags,
+            attributes: moved.attributes
         });
         return moved;
+    }
+    async updateScriptMetadata(pathInput, expectedHash, metadataInput, placeId, trace: unknown = undefined) {
+        this.assertMutatingPlace(placeId);
+        const path = normalizePath(pathInput);
+        if (!expectedHash || typeof expectedHash !== "string") {
+            throw new BridgeError("invalid_expected_hash", "expectedHash is required", 400);
+        }
+        const current = await this.refreshScript(path, trace);
+        if (current.hash !== expectedHash) {
+            throw new BridgeError("hash_conflict", "Hash mismatch before metadata write", 409, {
+                expectedHash,
+                currentHash: current.hash
+            });
+        }
+        const active = this.liveSession();
+        if (!active) {
+            throw new BridgeError("studio_offline", "No active Studio session", 503);
+        }
+        const metadata = metadataInput && typeof metadataInput === "object" ? metadataInput : {};
+        const expectedTags = applyMetadataPatchToTags(current.tags, metadata);
+        const expectedAttributes = applyMetadataPatchToAttributes(current.attributes, metadata);
+        const queued = this.queue.enqueueDetailed("set_script_metadata_if_hash", {
+            path,
+            expectedHash: current.hash,
+            addTags: normalizeTagList(metadata.addTags),
+            removeTags: normalizeTagList(metadata.removeTags),
+            attributes: normalizeAttributesMap(metadata.attributes),
+            clearAttributes: Array.isArray(metadata.clearAttributes) ? metadata.clearAttributes.map((entry) => String(entry)) : [],
+            requestId: trace?.requestId
+        }, COMMAND_TIMEOUTS_MS.set_script_source_if_hash);
+        trace?.noteCommand(queued.command.commandId, queued.command.type);
+        await queued.result;
+        const refreshed = await this.refreshScript(path, trace);
+        const actualTags = normalizeTagList(refreshed.tags);
+        const actualAttributes = normalizeAttributesMap(refreshed.attributes);
+        if (stableJson(actualTags) !== stableJson(expectedTags) || !sameMetadataAttributes(actualAttributes, expectedAttributes)) {
+            throw buildMetadataVerificationError("script", refreshed.path, expectedTags, actualTags, expectedAttributes, actualAttributes);
+        }
+        await this.cache.recordChangedItems("script", "script_write", [{ path: refreshed.path, updatedAt: refreshed.updatedAt }]);
+        return refreshed;
     }
     async upsertScript(pathInput, classNameInput, source, options = {}) {
         this.assertMutatingPlace(options.placeId);
         const path = normalizePath(pathInput);
         const className = toScriptClass(classNameInput);
-        const active = this.sessions.active();
+        const active = this.liveSession();
+        if (!active) {
+            throw new BridgeError("studio_offline", "No active Studio session", 503);
+        }
         const useBase64 = active?.base64Transport === true;
-        await this.queue.enqueue("upsert_script", {
+        const trace = options.trace;
+        trace?.startPhase("queue-write", { path: [...path], className });
+        const queued = this.queue.enqueueDetailed("upsert_script", {
             path,
             className,
             newSource: source,
-            newSourceBase64: useBase64 ? Buffer.from(source, "utf8").toString("base64") : undefined
+            newSourceBase64: useBase64 ? Buffer.from(source, "utf8").toString("base64") : undefined,
+            requestId: trace?.requestId
         }, COMMAND_TIMEOUTS_MS.upsert_script);
-        const created = await this.refreshScript(path);
+        trace?.noteCommand(queued.command.commandId, queued.command.type);
+        trace?.endPhase("queue-write", "ok", { commandId: queued.command.commandId });
+        trace?.startPhase("plugin-exec", { commandId: queued.command.commandId });
+        let result;
+        try {
+            result = await queued.result;
+            trace?.endPhase("plugin-exec", "ok", { commandId: queued.command.commandId });
+        }
+        catch (error) {
+            trace?.endPhase("plugin-exec", "error", {
+                commandId: queued.command.commandId,
+                code: error instanceof BridgeError ? error.code : "internal"
+            });
+            if (error instanceof BridgeError && error.code === "timeout") {
+                throw new BridgeError("timeout", error.message, error.status, {
+                    ...(error.details && typeof error.details === "object" ? error.details : {}),
+                    requestId: trace?.requestId ?? null,
+                    lastCompletedPhase: "queue-write",
+                    stuckPhase: "plugin-exec",
+                    commandId: queued.command.commandId
+                });
+            }
+            throw error;
+        }
+        const createdPath = Array.isArray(result?.path) ? normalizePath(result.path) : path;
+        const created = {
+            path: createdPath,
+            className: toScriptClass(result?.className ?? className),
+            source,
+            hash: typeof result?.hash === "string" && result.hash.length > 0 ? result.hash : undefined,
+            draftAware: result?.draftAware === true,
+            readChannel: toReadChannel(result?.readChannel),
+            tags: normalizeTagList(result?.tags),
+            attributes: normalizeAttributesMap(result?.attributes)
+        };
+        if (shouldVerifyScriptWrite(source)) {
+            trace?.startPhase("post-refresh", { path: [...created.path], verification: "multiline_integrity_check" });
+            let verified;
+            try {
+                verified = await this.refreshScript(created.path, trace);
+                if (normalizeSource(verified.source) !== normalizeSource(source)) {
+                    throw buildWriteVerificationError(created.path, source, verified.source);
+                }
+                trace?.endPhase("post-refresh", "ok", {
+                    verification: "multiline_integrity_check",
+                    hash: verified.hash
+                });
+            }
+            catch (error) {
+                trace?.endPhase("post-refresh", "error");
+                if (error instanceof BridgeError && error.code === "timeout") {
+                    throw new BridgeError("timeout", error.message, error.status, {
+                        ...(error.details && typeof error.details === "object" ? error.details : {}),
+                        requestId: trace?.requestId ?? null,
+                        lastCompletedPhase: "plugin-exec",
+                        stuckPhase: "post-refresh"
+                    });
+                }
+                throw error;
+            }
+            await this.cache.recordChangedItems("script", "script_write", [{ path: verified.path, updatedAt: verified.updatedAt }]);
+            return verified;
+        }
+        await this.cache.upsertMany(active, [created]);
+        await this.index.upsertChangedPaths([created.path]);
+        const stored = await this.cache.getScript(created.path);
+        if (!stored) {
+            throw new BridgeError("internal", `Script cache write failed after upsert: ${created.path.join("/")}`, 500, { path: created.path });
+        }
         await this.cache.recordChangedItems("script", "script_write", [{ path: created.path, updatedAt: created.updatedAt }]);
-        return created;
+        return stored;
     }
     async validateOperation(kindInput, payloadInput) {
         const kind = String(kindInput ?? "").trim();
@@ -1348,13 +1724,19 @@ export class BridgeService {
         }
         throw new BridgeError("invalid_operation_kind", "kind must be script_delete | script_move | script_patch | ui_clone | ui_template | ui_batch | ui_layout", 400);
     }
-    async applyScriptPatch(pathInput, expectedHash, patchInput, placeId) {
+    async applyScriptPatch(pathInput, expectedHash, patchInput, placeId, options = {}) {
         this.assertMutatingPlace(placeId);
+        const trace = options.trace;
+        trace?.startPhase("validate", { patchLength: Array.isArray(patchInput) ? patchInput.length : 0 });
         const validationIssues = validateScriptPatchOps(patchInput);
         if (validationIssues.length > 0) {
+            trace?.endPhase("validate", "error", { issues: validationIssues.length });
             throw new BridgeError("patch_invalid", validationIssues[0].message, 400, { issues: validationIssues });
         }
+        trace?.endPhase("validate", "ok");
+        trace?.startPhase("pre-refresh");
         const current = await this.readScript(pathInput, { forceRefresh: true, maxAgeMs: 0 });
+        trace?.endPhase("pre-refresh", "ok", { hash: current.script.hash });
         if (current.script.hash !== expectedHash) {
             throw new BridgeError("hash_conflict", "Hash mismatch before patch write", 409, {
                 expectedHash,
@@ -1368,16 +1750,35 @@ export class BridgeService {
         catch (error) {
             const code = error?.name === "patch_target_not_found" ? "patch_target_not_found" : "patch_invalid";
             throw new BridgeError(code, error instanceof Error ? error.message : String(error), 400, {
-                operationIndex: error?.operationIndex ?? null
+                operationIndex: error?.operationIndex ?? null,
+                matchedCount: error?.matchedCount ?? null,
+                ambiguousMatches: error?.ambiguousMatches ?? null,
+                nearbyContext: error?.nearbyContext ?? null
             });
         }
-        const updated = await this.updateScript(current.script.path, patched.source, current.script.hash, placeId);
+        if (options.dryRun === true) {
+            trace?.startPhase("dry-run");
+            trace?.endPhase("dry-run", "ok");
+            return {
+                path: current.script.path,
+                hash: current.script.hash,
+                updatedAt: current.script.updatedAt,
+                operationsApplied: patched.operationsApplied,
+                previewSource: patched.source,
+                diff: diffLines(current.script.source, patched.source),
+                dryRun: true,
+                applicable: true,
+                recommendedNextCalls: ["rbx_apply_script_patch", "rbx_diff_script"]
+            };
+        }
+        const updated = await this.updateScript(current.script.path, patched.source, current.script.hash, placeId, trace);
         return {
             path: updated.path,
             hash: updated.hash,
             updatedAt: updated.updatedAt,
             operationsApplied: patched.operationsApplied,
             source: updated.source,
+            dryRun: false,
             recommendedNextCalls: ["rbx_diff_script", "rbx_get_script"]
         };
     }
@@ -1875,7 +2276,43 @@ export class BridgeService {
         await this.cache.recordChangedItems("ui_root", "ui_write", [{ path: updated.path, updatedAt: updated.updatedAt }]);
         return updated;
     }
-    async createUi(parentPathInput, className, name, props = {}, index, placeId) {
+    async updateUiMetadata(pathInput, expectedVersion, metadataInput, placeId) {
+        this.assertUiMutationsAllowed(placeId);
+        const path = normalizePath(pathInput);
+        const current = await this.refreshUiTree(path);
+        if (current.version !== expectedVersion) {
+            throw new BridgeError("version_conflict", "UI version mismatch before metadata write", 409, {
+                expectedVersion,
+                currentVersion: current.version
+            });
+        }
+        const metadata = metadataInput && typeof metadataInput === "object" ? metadataInput : {};
+        const expectedTags = applyMetadataPatchToTags(current.tags, metadata);
+        const expectedAttributes = applyMetadataPatchToAttributes(current.attributes, metadata);
+        await this.queue.enqueue("mutate_ui_batch_if_version", {
+            rootPath: path,
+            expectedVersion: current.version,
+            operations: [
+                {
+                    op: "update_metadata",
+                    path,
+                    addTags: normalizeTagList(metadata.addTags),
+                    removeTags: normalizeTagList(metadata.removeTags),
+                    attributes: normalizeAttributesMap(metadata.attributes),
+                    clearAttributes: Array.isArray(metadata.clearAttributes) ? metadata.clearAttributes.map((entry) => String(entry)) : []
+                }
+            ]
+        }, COMMAND_TIMEOUTS_MS.mutate_ui_batch_if_version);
+        const updated = await this.refreshUiTree(path);
+        const actualTags = normalizeTagList(updated.tags);
+        const actualAttributes = normalizeAttributesMap(updated.attributes);
+        if (stableJson(actualTags) !== stableJson(expectedTags) || !sameMetadataAttributes(actualAttributes, expectedAttributes)) {
+            throw buildMetadataVerificationError("ui", updated.path, expectedTags, actualTags, expectedAttributes, actualAttributes);
+        }
+        await this.cache.recordChangedItems("ui_root", "ui_write", [{ path: updated.path, updatedAt: updated.updatedAt }]);
+        return updated;
+    }
+    async createUi(parentPathInput, className, name, props = {}, index, placeId, metadataInput = {}) {
         this.assertUiMutationsAllowed(placeId);
         const parentPath = normalizePath(parentPathInput);
         const parent = await this.refreshUiTree(parentPath);
@@ -1884,6 +2321,7 @@ export class BridgeService {
                 path: [...parentPath, name]
             });
         }
+        const metadata = metadataInput && typeof metadataInput === "object" ? metadataInput : {};
         await this.queue.enqueue("mutate_ui_batch_if_version", {
             rootPath: parentPath,
             expectedVersion: parent.version,
@@ -1894,6 +2332,8 @@ export class BridgeService {
                     className,
                     name,
                     props,
+                    tags: normalizeTagList(metadata.tags ?? metadata.addTags),
+                    attributes: normalizeAttributesMap(metadata.attributes),
                     index
                 }
             ]
@@ -1996,38 +2436,139 @@ export class BridgeService {
         await this.cache.recordChangedItems("ui_root", "ui_write", [{ path: moved.path, updatedAt: moved.updatedAt }]);
         return moved;
     }
-    getLogs(cursor, limitInput, minLevelInput) {
+    getLogs(cursor, limitInput, minLevelInput, requestId: string | undefined = undefined, sinceTime: string | undefined = undefined, untilTime: string | undefined = undefined) {
         const limit = Math.max(1, Math.min(Math.trunc(limitInput ?? 100), 500));
         const minLevel = LOG_LEVELS.has(minLevelInput ?? "info") ? (minLevelInput ?? "info") : "info";
         const minPriority = levelPriority(minLevel);
         const afterCursor = cursor ? Number.parseInt(cursor, 10) : 0;
+        const sinceMs = typeof sinceTime === "string" && sinceTime ? Date.parse(sinceTime) : null;
+        const untilMs = typeof untilTime === "string" && untilTime ? Date.parse(untilTime) : null;
         const filtered = this.logEntries.filter((entry) => {
             const entryCursor = Number.parseInt(entry.cursor, 10);
-            return entryCursor > afterCursor && levelPriority(entry.level) >= minPriority;
+            const entryTimeMs = Date.parse(entry.time);
+            if (entryCursor <= afterCursor || levelPriority(entry.level) < minPriority) {
+                return false;
+            }
+            if (requestId && entry.requestId !== requestId) {
+                return false;
+            }
+            if (sinceMs !== null && Number.isFinite(sinceMs) && entryTimeMs < sinceMs) {
+                return false;
+            }
+            if (untilMs !== null && Number.isFinite(untilMs) && entryTimeMs > untilMs) {
+                return false;
+            }
+            return true;
         });
         const items = filtered.slice(0, limit);
         return {
             items,
             nextCursor: items.length > 0 ? items[items.length - 1].cursor : cursor ?? null,
             logBufferSize: this.logEntries.length,
-            lastLogAt: this.lastLogAt
+            lastLogAt: this.lastLogAt,
+            lastCapturedAt: this.lastLogAt,
+            logsStale: this.lastLogAt ? nowMs() - Date.parse(this.lastLogAt) > 120_000 : true
+        };
+    }
+    createTrace(requestId, transport, endpoint, toolName: string | undefined = undefined) {
+        const trace = this.traceStore.start(requestId, transport, endpoint, toolName);
+        const active = this.liveSession();
+        const cacheMeta = this.cache.metadata();
+        trace.setSessionSnapshot({
+            sessionId: active?.sessionId ?? null,
+            placeId: active?.placeId ?? cacheMeta?.placeId ?? null,
+            placeName: active?.placeName ?? cacheMeta?.placeName ?? null,
+            pluginVersion: active?.pluginVersion ?? null,
+            studioOnline: Boolean(active)
+        });
+        return trace;
+    }
+    liveSession() {
+        const active = this.sessions.active();
+        if (!active) {
+            return null;
+        }
+        return sessionAgeMs(active) <= SESSION_STALE_AFTER_MS ? active : null;
+    }
+    getRequestTrace(requestId) {
+        return this.traceStore.get(requestId);
+    }
+    async getScriptMetadata(pathInput, options = {}) {
+        const read = await this.readScript(pathInput, options);
+        return {
+            path: read.script.path,
+            resolvedPath: read.script.path,
+            resolvedPathSegments: [...read.script.path],
+            hash: read.script.hash,
+            size: read.script.source.length,
+            updatedAt: read.script.updatedAt,
+            draftAware: read.script.draftAware,
+            readChannel: read.script.readChannel,
+            tags: [...read.script.tags],
+            attributes: { ...read.script.attributes },
+            fromCache: read.fromCache,
+            cacheAgeMs: read.cacheAgeMs,
+            refreshedBeforeRead: read.refreshedBeforeRead
+        };
+    }
+    async getScripts(pathsInput, options = {}) {
+        if (!Array.isArray(pathsInput)) {
+            throw new BridgeError("invalid_payload", "paths must be an array", 400);
+        }
+        const items = [];
+        for (const pathInput of pathsInput) {
+            try {
+                const read = await this.readScript(pathInput, options);
+                items.push({
+                    ok: true,
+                    path: read.script.path,
+                    resolvedPath: read.script.path,
+                    resolvedPathSegments: [...read.script.path],
+                    source: options.includeSource === false ? undefined : read.script.source,
+                    hash: read.script.hash,
+                    updatedAt: read.script.updatedAt,
+                    draftAware: read.script.draftAware,
+                    readChannel: read.script.readChannel,
+                    tags: [...read.script.tags],
+                    attributes: { ...read.script.attributes },
+                    fromCache: read.fromCache,
+                    cacheAgeMs: read.cacheAgeMs,
+                    refreshedBeforeRead: read.refreshedBeforeRead
+                });
+            }
+            catch (error) {
+                items.push({
+                    ok: false,
+                    path: Array.isArray(pathInput) ? pathInput : pathInput,
+                    error: error instanceof BridgeError
+                        ? { code: error.code, message: error.message, details: error.details ?? null }
+                        : { code: "internal", message: error instanceof Error ? error.message : String(error) }
+                });
+            }
+        }
+        return {
+            items,
+            count: items.length
         };
     }
     health() {
-        const active = this.sessions.active();
+        const active = this.liveSession();
+        const rawActive = this.sessions.active();
         const cacheMeta = this.cache.metadata();
         const activePlaceId = active?.placeId ?? cacheMeta?.placeId ?? null;
         const activePlaceName = active?.placeName ?? cacheMeta?.placeName ?? null;
-        const publicSession = active
+        const publicSession = rawActive
             ? {
-                sessionId: active.sessionId,
-                clientId: active.clientId,
-                placeId: active.placeId,
-                placeName: active.placeName,
-                pluginVersion: active.pluginVersion,
-                connectedAt: active.connectedAt,
-                lastSeenAt: active.lastSeenAt,
-                lastPollAt: active.lastPollAt
+                sessionId: rawActive.sessionId,
+                clientId: rawActive.clientId,
+                placeId: rawActive.placeId,
+                placeName: rawActive.placeName,
+                pluginVersion: rawActive.pluginVersion,
+                connectedAt: rawActive.connectedAt,
+                lastSeenAt: rawActive.lastSeenAt,
+                lastPollAt: rawActive.lastPollAt,
+                stale: sessionAgeMs(rawActive) > SESSION_STALE_AFTER_MS,
+                staleAgeMs: sessionAgeMs(rawActive)
             }
             : null;
         const bridgeBaseUrl = `http://${this.options.bridgeHost}:${this.options.bridgePort}`;
@@ -2044,6 +2585,11 @@ export class BridgeService {
             },
             expectedPlaceId: this.options.expectedPlaceId || null,
             studioOnline: Boolean(active),
+            scriptReadOk: Boolean(active),
+            scriptWriteOk: Boolean(active && (active.editorApiAvailable === true || cacheMeta?.editorApiAvailable === true)),
+            uiWriteOk: Boolean(active),
+            logCaptureFresh: Boolean(active?.logCaptureAvailable && this.lastLogAt && nowMs() - Date.parse(this.lastLogAt) <= 120_000),
+            draftMode: "draft_only",
             session: publicSession,
             draft: {
                 writeMode: "draft_only",
@@ -2106,6 +2652,13 @@ export class BridgeService {
                 placeName: health.cache?.placeName ?? null,
                 studioOnline: health.studioOnline ?? false
             },
+            readiness: {
+                scriptReadOk: health.scriptReadOk,
+                scriptWriteOk: health.scriptWriteOk,
+                uiWriteOk: health.uiWriteOk,
+                logCaptureFresh: health.logCaptureFresh,
+                draftMode: health.draftMode
+            },
             writePolicy: {
                 mode: "hash_locked",
                 createOnly: true,
@@ -2148,18 +2701,30 @@ export class BridgeService {
             },
             preferredBootstrapCalls: [
                 "GET /v1/agent/capabilities",
+                "GET /v1/agent/schema",
                 "POST /v1/agent/health",
                 "POST /v1/agent/get_project_summary"
             ],
             bootstrapWorkflow: [
-                "capabilities -> health -> get_project_summary -> targeted retrieval"
+                "capabilities -> schema -> health -> get_project_summary -> targeted retrieval"
             ],
             recommendedNextStepByError: recommendedNextStepByError(),
+            modelWaitPolicy: heavyOperationPolicy(),
+            gotchas: [
+                "All public paths are slash-delimited strings.",
+                "get_related_context.target must be an object.",
+                "apply_script_patch.patch must be an array of operations.",
+                "search_text is lexical, not semantic.",
+                "For heavy operations, do not wait longer than 30 seconds; inspect requestId via get_request_trace."
+            ],
             operations: {
                 tools: [
                     "rbx_health",
+                    "rbx_schema",
                     "rbx_list_scripts",
                     "rbx_get_script",
+                    "rbx_get_script_metadata",
+                    "rbx_get_scripts",
                     "rbx_refresh_script",
                     "rbx_update_script",
                     "rbx_create_script",
@@ -2171,7 +2736,9 @@ export class BridgeService {
                     "rbx_get_ui_layout_snapshot",
                     "rbx_validate_ui_layout",
                     "rbx_explain_error",
+                    "rbx_validate_payload",
                     "rbx_validate_operation",
+                    "rbx_get_request_trace",
                     "rbx_apply_script_patch",
                     "rbx_diff_script",
                     "rbx_find_entrypoints",
@@ -2202,9 +2769,12 @@ export class BridgeService {
                 ],
                 agentHttp: [
                     "GET /v1/agent/capabilities",
+                    "GET /v1/agent/schema",
                     "POST /v1/agent/health",
                     "POST /v1/agent/list_scripts",
                     "POST /v1/agent/get_script",
+                    "POST /v1/agent/get_script_metadata",
+                    "POST /v1/agent/get_scripts",
                     "POST /v1/agent/refresh_script",
                     "POST /v1/agent/update_script",
                     "POST /v1/agent/create_script",
@@ -2216,7 +2786,9 @@ export class BridgeService {
                     "POST /v1/agent/get_ui_layout_snapshot",
                     "POST /v1/agent/validate_ui_layout",
                     "POST /v1/agent/explain_error",
+                    "POST /v1/agent/validate_payload",
                     "POST /v1/agent/validate_operation",
+                    "POST /v1/agent/get_request_trace",
                     "POST /v1/agent/apply_script_patch",
                     "POST /v1/agent/diff_script",
                     "POST /v1/agent/find_entrypoints",
@@ -2438,11 +3010,14 @@ export class BridgeService {
     async requestUiSnapshotAll() {
         await this.queue.enqueue("snapshot_ui_roots", {}, COMMAND_TIMEOUTS_MS.snapshot_ui_roots);
     }
-    async requestSnapshotByPath(path) {
-        await this.queue.enqueue("snapshot_script_by_path", {
+    async requestSnapshotByPath(path, trace) {
+        const queued = this.queue.enqueueDetailed("snapshot_script_by_path", {
             path,
-            key: pathKey(path)
+            key: pathKey(path),
+            requestId: trace?.requestId
         }, COMMAND_TIMEOUTS_MS.snapshot_script_by_path);
+        trace?.noteCommand(queued.command.commandId, queued.command.type);
+        await queued.result;
     }
     async requestUiSnapshotByPath(path) {
         await this.queue.enqueue("snapshot_ui_subtree_by_path", {
@@ -2778,7 +3353,7 @@ export class BridgeService {
         if (!placeId) {
             return;
         }
-        const active = this.sessions.active();
+        const active = this.liveSession();
         const knownPlaceId = active?.placeId ?? this.cache.metadata()?.placeId ?? null;
         if (!knownPlaceId) {
             throw new BridgeError("studio_offline", "Studio is offline", 503);
@@ -2792,7 +3367,7 @@ export class BridgeService {
     }
     assertUiMutationsAllowed(placeId) {
         this.assertMutatingPlace(placeId);
-        const playState = this.sessions.active()?.playState ?? "stopped";
+        const playState = this.liveSession()?.playState ?? "stopped";
         if (playState !== "stopped" && playState !== "error") {
             throw new BridgeError("play_mutation_forbidden", "UI mutations are forbidden during playtest", 409, {
                 playState
@@ -2896,9 +3471,3 @@ export class BridgeService {
         return Math.max(0, nowMs() - parsed);
     }
 }
-
-
-
-
-
-
