@@ -159,6 +159,23 @@ function normalizeTagList(input) {
 function normalizeAttributesMap(input) {
     return typeof input === "object" && input ? { ...input } : {};
 }
+function normalizeMetadataTagPatch(currentTags, metadata) {
+    const fullReplacement = normalizeTagList(metadata?.tags);
+    if (fullReplacement.length > 0 || Array.isArray(metadata?.tags)) {
+        const current = new Set(normalizeTagList(currentTags));
+        const next = new Set(fullReplacement);
+        return {
+            addTags: fullReplacement.filter((tag) => !current.has(tag)),
+            removeTags: [...current].filter((tag) => !next.has(tag)),
+            expectedTags: [...fullReplacement].sort()
+        };
+    }
+    return {
+        addTags: normalizeTagList(metadata?.addTags),
+        removeTags: normalizeTagList(metadata?.removeTags),
+        expectedTags: applyMetadataPatchToTags(currentTags, metadata)
+    };
+}
 function applyMetadataPatchToTags(currentTags, metadata) {
     const next = new Set(normalizeTagList(currentTags));
     for (const tag of normalizeTagList(metadata?.addTags)) {
@@ -1423,13 +1440,14 @@ export class BridgeService {
             throw new BridgeError("studio_offline", "No active Studio session", 503);
         }
         const metadata = metadataInput && typeof metadataInput === "object" ? metadataInput : {};
-        const expectedTags = applyMetadataPatchToTags(current.tags, metadata);
+        const tagPatch = normalizeMetadataTagPatch(current.tags, metadata);
+        const expectedTags = tagPatch.expectedTags;
         const expectedAttributes = applyMetadataPatchToAttributes(current.attributes, metadata);
         const queued = this.queue.enqueueDetailed("set_script_metadata_if_hash", {
             path,
             expectedHash: current.hash,
-            addTags: normalizeTagList(metadata.addTags),
-            removeTags: normalizeTagList(metadata.removeTags),
+            addTags: tagPatch.addTags,
+            removeTags: tagPatch.removeTags,
             attributes: normalizeAttributesMap(metadata.attributes),
             clearAttributes: Array.isArray(metadata.clearAttributes) ? metadata.clearAttributes.map((entry) => String(entry)) : [],
             requestId: trace?.requestId
@@ -2287,7 +2305,8 @@ export class BridgeService {
             });
         }
         const metadata = metadataInput && typeof metadataInput === "object" ? metadataInput : {};
-        const expectedTags = applyMetadataPatchToTags(current.tags, metadata);
+        const tagPatch = normalizeMetadataTagPatch(current.tags, metadata);
+        const expectedTags = tagPatch.expectedTags;
         const expectedAttributes = applyMetadataPatchToAttributes(current.attributes, metadata);
         await this.queue.enqueue("mutate_ui_batch_if_version", {
             rootPath: path,
@@ -2296,8 +2315,8 @@ export class BridgeService {
                 {
                     op: "update_metadata",
                     path,
-                    addTags: normalizeTagList(metadata.addTags),
-                    removeTags: normalizeTagList(metadata.removeTags),
+                    addTags: tagPatch.addTags,
+                    removeTags: tagPatch.removeTags,
                     attributes: normalizeAttributesMap(metadata.attributes),
                     clearAttributes: Array.isArray(metadata.clearAttributes) ? metadata.clearAttributes.map((entry) => String(entry)) : []
                 }

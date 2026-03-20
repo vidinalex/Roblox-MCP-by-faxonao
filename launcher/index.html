@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RBXMCP Launcher</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <div id="activityBar" class="activity-bar" hidden></div>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div>
+            <h1>RBXMCP Launcher</h1>
+            <p>Two active Roblox projects, one clean control surface.</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshButton" class="ghost">Refresh</button>
+          <button id="createButton" class="primary">New Profile</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="workspace">
+          <div class="section-header">
+            <h2>Working Set</h2>
+            <p>Primary cards are pinned or most recently used profiles.</p>
+          </div>
+          <div id="primaryCards" class="primary-grid"></div>
+          <div class="section-header compact">
+            <h3>All Profiles</h3>
+          </div>
+          <div id="profileList" class="profile-list"></div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="panel" id="editorPanel">
+            <div class="panel-header">
+              <h2 id="editorTitle">Create Profile</h2>
+              <p>Named profiles keep each Roblox place isolated on its own port.</p>
+            </div>
+            <form id="profileForm" class="profile-form">
+              <input type="hidden" id="profileId" />
+              <label>
+                <span>Name</span>
+                <input id="profileName" type="text" placeholder="Arena Main" required />
+              </label>
+              <label>
+                <span>Workspace Path</span>
+                <input id="workspacePath" type="text" placeholder="C:\Projects\MyGame" required />
+              </label>
+              <div class="split">
+                <label>
+                  <span>Port</span>
+                  <input id="profilePort" type="text" placeholder="5111" required />
+                </label>
+                <label>
+                  <span>Place ID</span>
+                  <input id="expectedPlaceId" type="text" placeholder="83003959412113" />
+                </label>
+              </div>
+              <div class="toggle-row">
+                <label class="checkbox">
+                  <input id="favoriteToggle" type="checkbox" />
+                  <span>Pin in working set</span>
+                </label>
+                <label class="checkbox">
+                  <input id="autoStartToggle" type="checkbox" />
+                  <span>Auto-start on launcher open</span>
+                </label>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary">Save Profile</button>
+                <button type="button" id="resetFormButton" class="ghost">Reset</button>
+              </div>
+              <p id="formMessage" class="form-message"></p>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Logs</h2>
+              <p>Combined launcher-managed stdout, stderr, and health transitions across profiles.</p>
+            </div>
+            <div class="logs-toolbar">
+              <span id="logsTitle">All Projects</span>
+              <button id="openLogButton" class="ghost" disabled>Open Logs</button>
+            </div>
+            <pre id="logsView" class="logs-view">No logs captured yet.</pre>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./renderer.mjs"></script>
+  </body>
+  </html>

@@ -12,6 +12,7 @@ local CONFIG = {
 	PLUGIN_VERSION = "0.2.0",
 	LEGACY_BRIDGE_URL = "http://127.0.0.1:5000/v1/studio",
 	DEFAULT_BRIDGE_URL = "http://127.0.0.1:5100/v1/studio",
+	LAUNCHER_CONTROL_URL = "http://127.0.0.1:5124/launcher",
 	POLL_WAIT_MS = 100,
 	LOG_LIMIT = 300,
 	LOG_RENDER_THROTTLE = 0.08,
@@ -196,12 +197,6 @@ mainPageLayout.Padding = UDim.new(0, 10)
 mainPageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 mainPageLayout.Parent = mainPage
 
-local helperPage = Instance.new("Frame")
-helperPage.Size = UDim2.fromScale(1, 1)
-helperPage.Position = UDim2.fromScale(1, 0)
-helperPage.BackgroundTransparency = 1
-helperPage.Parent = bodyFrame
-
 local heroGlow = Instance.new("Frame")
 heroGlow.Size = UDim2.new(0.72, 0, 1, 0)
 heroGlow.Position = UDim2.new(0, 0, 0, 0)
@@ -282,14 +277,6 @@ statusBadge.Parent = headerCard
 local statusBadgeCorner = Instance.new("UICorner")
 statusBadgeCorner.CornerRadius = UDim.new(1, 0)
 statusBadgeCorner.Parent = statusBadge
-
-local quickStartButton = Instance.new("TextButton")
-quickStartButton.Size = UDim2.new(0, 108, 0, 26)
-quickStartButton.Position = UDim2.new(1, -118, 0, 12)
-quickStartButton.Text = "Quick Start"
-quickStartButton.Parent = headerCard
-styleButton(quickStartButton, COLORS.primary)
-insetText(quickStartButton, 10, 10)
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(0.48, -9, 0, 16)
@@ -379,6 +366,7 @@ fullUrlLabel.Font = Enum.Font.GothamMedium
 fullUrlLabel.TextSize = 11
 fullUrlLabel.Text = "Full URL"
 fullUrlLabel.Parent = connectionCard
+fullUrlLabel.Visible = false
 
 local fullUrlPreview = Instance.new("TextBox")
 fullUrlPreview.Size = UDim2.new(1, -18, 0, 28)
@@ -396,62 +384,14 @@ insetText(fullUrlPreview, 10, 10)
 local fullUrlCorner = Instance.new("UICorner")
 fullUrlCorner.CornerRadius = UDim.new(0, 8)
 fullUrlCorner.Parent = fullUrlPreview
-
-local advancedToggleButton = Instance.new("TextButton")
-advancedToggleButton.Size = UDim2.new(1, -18, 0, 24)
-advancedToggleButton.Position = UDim2.new(0, 9, 0, 148)
-advancedToggleButton.Text = "Advanced host edit"
-advancedToggleButton.Parent = connectionCard
-styleButton(advancedToggleButton, COLORS.secondary)
-insetText(advancedToggleButton, 10, 10)
-advancedToggleButton.Visible = false
-
-local advancedFrame = Instance.new("Frame")
-advancedFrame.Size = UDim2.new(1, -18, 0, 32)
-advancedFrame.Position = UDim2.new(0, 9, 0, 176)
-advancedFrame.BackgroundTransparency = 1
-advancedFrame.ClipsDescendants = true
-advancedFrame.Parent = connectionCard
-
-local hostInput = Instance.new("TextBox")
-hostInput.Size = UDim2.new(0.68, -4, 0, 30)
-hostInput.Position = UDim2.new(0, 0, 0, 0)
-hostInput.BackgroundColor3 = COLORS.surfaceAlt
-hostInput.TextColor3 = COLORS.textMain
-hostInput.PlaceholderColor3 = COLORS.textDim
-hostInput.TextXAlignment = Enum.TextXAlignment.Left
-hostInput.ClearTextOnFocus = false
-hostInput.Font = Enum.Font.Gotham
-hostInput.TextSize = 11
-hostInput.PlaceholderText = "127.0.0.1"
-hostInput.Parent = advancedFrame
-insetText(hostInput, 10, 10)
-local hostCorner = Instance.new("UICorner")
-hostCorner.CornerRadius = UDim.new(0, 8)
-hostCorner.Parent = hostInput
-
-local schemeInput = Instance.new("TextBox")
-schemeInput.Size = UDim2.new(0.32, -2, 0, 30)
-schemeInput.Position = UDim2.new(0.68, 6, 0, 0)
-schemeInput.BackgroundColor3 = COLORS.surfaceAlt
-schemeInput.TextColor3 = COLORS.textMain
-schemeInput.PlaceholderColor3 = COLORS.textDim
-schemeInput.TextXAlignment = Enum.TextXAlignment.Left
-schemeInput.ClearTextOnFocus = false
-schemeInput.Font = Enum.Font.Gotham
-schemeInput.TextSize = 11
-schemeInput.PlaceholderText = "http"
-schemeInput.Parent = advancedFrame
-insetText(schemeInput, 10, 10)
-local schemeCorner = Instance.new("UICorner")
-schemeCorner.CornerRadius = UDim.new(0, 8)
-schemeCorner.Parent = schemeInput
+fullUrlPreview.Visible = false
 
 local actionRow = Instance.new("Frame")
 actionRow.Size = UDim2.new(1, -18, 0, 30)
 actionRow.Position = UDim2.new(0, 9, 0, 182)
 actionRow.BackgroundTransparency = 1
 actionRow.Parent = connectionCard
+actionRow.Visible = false
 
 local reconnectButton = Instance.new("TextButton")
 reconnectButton.Size = UDim2.new(0.34, -6, 1, 0)
@@ -460,317 +400,16 @@ reconnectButton.Text = "Reconnect"
 reconnectButton.Parent = actionRow
 styleButton(reconnectButton, COLORS.primary)
 insetText(reconnectButton, 10, 10)
-
-local pingButton = Instance.new("TextButton")
-pingButton.Size = UDim2.new(0.33, -6, 1, 0)
-pingButton.Position = UDim2.new(0.34, 3, 0, 0)
-pingButton.Text = "Ping"
-pingButton.Parent = actionRow
-styleButton(pingButton, COLORS.secondary)
-insetText(pingButton, 10, 10)
+reconnectButton.Visible = false
 
 local toggleButton = Instance.new("TextButton")
-toggleButton.Size = UDim2.new(0.33, -6, 1, 0)
-toggleButton.Position = UDim2.new(0.67, 6, 0, 0)
+toggleButton.Size = UDim2.new(0.5, -3, 1, 0)
+toggleButton.Position = UDim2.new(0.5, 3, 0, 0)
 toggleButton.Text = "Bridge: ON"
 toggleButton.Parent = actionRow
 styleButton(toggleButton, COLORS.success)
 insetText(toggleButton, 10, 10)
-
-local diagnosticsCard = Instance.new("Frame")
-diagnosticsCard.Size = UDim2.new(1, 0, 0, 210)
-diagnosticsCard.Parent = mainPage
-styleCard(diagnosticsCard)
-
-local diagnosticsTitle = Instance.new("TextLabel")
-diagnosticsTitle.Size = UDim2.new(1, -18, 0, 18)
-diagnosticsTitle.Position = UDim2.new(0, 9, 0, 8)
-diagnosticsTitle.BackgroundTransparency = 1
-diagnosticsTitle.TextColor3 = COLORS.textMain
-diagnosticsTitle.TextXAlignment = Enum.TextXAlignment.Left
-diagnosticsTitle.Font = Enum.Font.FredokaOne
-diagnosticsTitle.TextSize = 12
-diagnosticsTitle.Text = "Diagnostics"
-diagnosticsTitle.Parent = diagnosticsCard
-
-local diagnosticsToggle = Instance.new("TextButton")
-diagnosticsToggle.Size = UDim2.new(0, 156, 0, 24)
-diagnosticsToggle.Position = UDim2.new(1, -165, 0, 6)
-diagnosticsToggle.Text = "Toggle details"
-diagnosticsToggle.Parent = diagnosticsCard
-styleButton(diagnosticsToggle, COLORS.secondary)
-insetText(diagnosticsToggle, 10, 10)
-
-local errorLabel = Instance.new("TextLabel")
-errorLabel.Size = UDim2.new(0.5, -14, 0, 16)
-errorLabel.Position = UDim2.new(0, 9, 0, 38)
-errorLabel.BackgroundTransparency = 1
-errorLabel.TextColor3 = COLORS.danger
-errorLabel.TextXAlignment = Enum.TextXAlignment.Left
-errorLabel.TextYAlignment = Enum.TextYAlignment.Top
-errorLabel.Font = Enum.Font.GothamMedium
-errorLabel.TextWrapped = false
-errorLabel.TextSize = 11
-errorLabel.Text = "Error"
-errorLabel.Parent = diagnosticsCard
-
-local errorDetailsBox = Instance.new("TextBox")
-errorDetailsBox.Size = UDim2.new(0.5, -14, 0, 92)
-errorDetailsBox.Position = UDim2.new(0, 9, 0, 58)
-errorDetailsBox.BackgroundColor3 = COLORS.surfaceAlt
-errorDetailsBox.TextColor3 = COLORS.textMain
-errorDetailsBox.TextXAlignment = Enum.TextXAlignment.Left
-errorDetailsBox.TextYAlignment = Enum.TextYAlignment.Top
-errorDetailsBox.TextWrapped = true
-errorDetailsBox.TextEditable = false
-errorDetailsBox.Font = Enum.Font.Code
-errorDetailsBox.TextSize = 11
-errorDetailsBox.Visible = true
-errorDetailsBox.Parent = diagnosticsCard
-insetText(errorDetailsBox, 10, 10)
-local errDetailCorner = Instance.new("UICorner")
-errDetailCorner.CornerRadius = UDim.new(0, 8)
-errDetailCorner.Parent = errorDetailsBox
-
-local warningLabel = Instance.new("TextLabel")
-warningLabel.Size = UDim2.new(0.5, -14, 0, 16)
-warningLabel.Position = UDim2.new(0.5, 5, 0, 38)
-warningLabel.BackgroundTransparency = 1
-warningLabel.TextColor3 = COLORS.warn
-warningLabel.TextXAlignment = Enum.TextXAlignment.Left
-warningLabel.TextYAlignment = Enum.TextYAlignment.Top
-warningLabel.Font = Enum.Font.GothamMedium
-warningLabel.TextWrapped = false
-warningLabel.TextSize = 11
-warningLabel.Text = "Warning"
-warningLabel.Parent = diagnosticsCard
-
-local warningDetailsBox = Instance.new("TextBox")
-warningDetailsBox.Size = UDim2.new(0.5, -14, 0, 92)
-warningDetailsBox.Position = UDim2.new(0.5, 5, 0, 58)
-warningDetailsBox.BackgroundColor3 = COLORS.surfaceAlt
-warningDetailsBox.TextColor3 = COLORS.textMain
-warningDetailsBox.TextXAlignment = Enum.TextXAlignment.Left
-warningDetailsBox.TextYAlignment = Enum.TextYAlignment.Top
-warningDetailsBox.TextWrapped = true
-warningDetailsBox.TextEditable = false
-warningDetailsBox.Font = Enum.Font.Code
-warningDetailsBox.TextSize = 11
-warningDetailsBox.Visible = true
-warningDetailsBox.Parent = diagnosticsCard
-insetText(warningDetailsBox, 10, 10)
-local warnDetailCorner = Instance.new("UICorner")
-warnDetailCorner.CornerRadius = UDim.new(0, 8)
-warnDetailCorner.Parent = warningDetailsBox
-
-local clearDiagnosticsButton = Instance.new("TextButton")
-clearDiagnosticsButton.Size = UDim2.new(0, 138, 0, 24)
-clearDiagnosticsButton.Position = UDim2.new(0, 9, 1, -30)
-clearDiagnosticsButton.Text = "Clear diagnostics"
-clearDiagnosticsButton.Parent = diagnosticsCard
-styleButton(clearDiagnosticsButton, COLORS.secondary)
-insetText(clearDiagnosticsButton, 10, 10)
-
-local logCard = Instance.new("Frame")
-logCard.Size = UDim2.new(1, 0, 0, 260)
-logCard.Parent = mainPage
-styleCard(logCard)
-
-local logTitle = Instance.new("TextLabel")
-logTitle.Size = UDim2.new(1, -18, 0, 18)
-logTitle.Position = UDim2.new(0, 9, 0, 8)
-logTitle.BackgroundTransparency = 1
-logTitle.TextColor3 = COLORS.textMain
-logTitle.TextXAlignment = Enum.TextXAlignment.Left
-logTitle.Font = Enum.Font.FredokaOne
-logTitle.TextSize = 12
-logTitle.Text = "Action log"
-logTitle.Parent = logCard
-
-local logCountLabel = Instance.new("TextLabel")
-logCountLabel.Size = UDim2.new(0.4, -9, 0, 16)
-logCountLabel.Position = UDim2.new(0, 9, 0, 28)
-logCountLabel.BackgroundTransparency = 1
-logCountLabel.TextColor3 = COLORS.textDim
-logCountLabel.TextXAlignment = Enum.TextXAlignment.Left
-logCountLabel.Font = Enum.Font.GothamMedium
-logCountLabel.TextSize = 10
-logCountLabel.Text = "0 entries"
-logCountLabel.Parent = logCard
-
-local logDroppedLabel = Instance.new("TextLabel")
-logDroppedLabel.Size = UDim2.new(0.6, -9, 0, 16)
-logDroppedLabel.Position = UDim2.new(0, 9, 0, 44)
-logDroppedLabel.BackgroundTransparency = 1
-logDroppedLabel.TextColor3 = COLORS.warn
-logDroppedLabel.TextXAlignment = Enum.TextXAlignment.Left
-logDroppedLabel.Font = Enum.Font.GothamMedium
-logDroppedLabel.TextSize = 10
-logDroppedLabel.Text = ""
-logDroppedLabel.Visible = false
-logDroppedLabel.Parent = logCard
-
-local logToggleButton = Instance.new("TextButton")
-logToggleButton.Size = UDim2.new(0, 96, 0, 24)
-logToggleButton.Position = UDim2.new(1, -182, 0, 22)
-logToggleButton.Text = "Collapse"
-logToggleButton.Parent = logCard
-styleButton(logToggleButton, COLORS.secondary)
-insetText(logToggleButton, 10, 10)
-
-local clearLogButton = Instance.new("TextButton")
-clearLogButton.Size = UDim2.new(0, 72, 0, 24)
-clearLogButton.Position = UDim2.new(1, -78, 0, 22)
-clearLogButton.Text = "Clear"
-clearLogButton.Parent = logCard
-styleButton(clearLogButton, COLORS.secondary)
-insetText(clearLogButton, 10, 10)
-
-local logContainer = Instance.new("Frame")
-logContainer.Size = UDim2.new(1, -18, 0, 196)
-logContainer.Position = UDim2.new(0, 9, 0, 56)
-logContainer.BackgroundTransparency = 1
-logContainer.ClipsDescendants = true
-logContainer.Parent = logCard
-
-local logScroll = Instance.new("ScrollingFrame")
-logScroll.Size = UDim2.fromScale(1, 1)
-logScroll.BackgroundColor3 = COLORS.surfaceAlt
-logScroll.BorderSizePixel = 0
-logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-logScroll.CanvasSize = UDim2.new()
-logScroll.ScrollBarThickness = 6
-logScroll.ScrollBarImageColor3 = COLORS.secondary
-logScroll.Parent = logContainer
-local logScrollCorner = Instance.new("UICorner")
-logScrollCorner.CornerRadius = UDim.new(0, 8)
-logScrollCorner.Parent = logScroll
-
-local logListLayout = Instance.new("UIListLayout")
-logListLayout.Padding = UDim.new(0, 6)
-logListLayout.FillDirection = Enum.FillDirection.Vertical
-logListLayout.Parent = logScroll
-
-local logPadding = Instance.new("UIPadding")
-logPadding.PaddingLeft = UDim.new(0, 8)
-logPadding.PaddingRight = UDim.new(0, 8)
-logPadding.PaddingTop = UDim.new(0, 8)
-logPadding.PaddingBottom = UDim.new(0, 8)
-logPadding.Parent = logScroll
-
-local helperCard = Instance.new("Frame")
-helperCard.Size = UDim2.fromScale(1, 1)
-helperCard.Parent = helperPage
-styleCard(helperCard)
-
-local helperTitle = Instance.new("TextLabel")
-helperTitle.Size = UDim2.new(1, -18, 0, 18)
-helperTitle.Position = UDim2.new(0, 9, 0, 10)
-helperTitle.BackgroundTransparency = 1
-helperTitle.TextColor3 = COLORS.textMain
-helperTitle.TextXAlignment = Enum.TextXAlignment.Left
-helperTitle.Font = Enum.Font.FredokaOne
-helperTitle.TextSize = 12
-helperTitle.Text = "Server + AI bootstrap"
-helperTitle.Parent = helperCard
-
-local helperScroll = Instance.new("ScrollingFrame")
-helperScroll.Size = UDim2.new(1, -18, 1, -44)
-helperScroll.Position = UDim2.new(0, 9, 0, 36)
-helperScroll.BackgroundTransparency = 1
-helperScroll.BorderSizePixel = 0
-helperScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-helperScroll.CanvasSize = UDim2.new()
-helperScroll.ScrollBarThickness = 6
-helperScroll.ScrollBarImageColor3 = COLORS.secondary
-helperScroll.Parent = helperCard
-
-local helperScrollLayout = Instance.new("UIListLayout")
-helperScrollLayout.FillDirection = Enum.FillDirection.Vertical
-helperScrollLayout.Padding = UDim.new(0, 10)
-helperScrollLayout.Parent = helperScroll
-
-local helperScrollPadding = Instance.new("UIPadding")
-helperScrollPadding.PaddingLeft = UDim.new(0, 2)
-helperScrollPadding.PaddingRight = UDim.new(0, 2)
-helperScrollPadding.PaddingTop = UDim.new(0, 2)
-helperScrollPadding.PaddingBottom = UDim.new(0, 10)
-helperScrollPadding.Parent = helperScroll
-
-local serverCommandLabel = Instance.new("TextLabel")
-serverCommandLabel.Size = UDim2.new(1, -4, 0, 16)
-serverCommandLabel.BackgroundTransparency = 1
-serverCommandLabel.TextColor3 = COLORS.textDim
-serverCommandLabel.TextXAlignment = Enum.TextXAlignment.Left
-serverCommandLabel.Font = Enum.Font.GothamMedium
-serverCommandLabel.TextSize = 11
-serverCommandLabel.Text = "PowerShell server command"
-serverCommandLabel.Parent = helperScroll
-
-local serverCommandBox = Instance.new("TextBox")
-serverCommandBox.Size = UDim2.new(1, -4, 0, 90)
-serverCommandBox.BackgroundColor3 = COLORS.surfaceAlt
-serverCommandBox.TextColor3 = COLORS.textMain
-serverCommandBox.TextXAlignment = Enum.TextXAlignment.Left
-serverCommandBox.TextYAlignment = Enum.TextYAlignment.Top
-serverCommandBox.ClearTextOnFocus = false
-serverCommandBox.TextEditable = false
-serverCommandBox.MultiLine = true
-serverCommandBox.Font = Enum.Font.Code
-serverCommandBox.TextSize = 11
-serverCommandBox.Parent = helperScroll
-insetText(serverCommandBox, 10, 10)
-local serverCommandCorner = Instance.new("UICorner")
-serverCommandCorner.CornerRadius = UDim.new(0, 8)
-serverCommandCorner.Parent = serverCommandBox
-
-local promptHeader = Instance.new("Frame")
-promptHeader.Size = UDim2.new(1, -4, 0, 28)
-promptHeader.BackgroundTransparency = 1
-promptHeader.Parent = helperScroll
-
-local promptLabel = Instance.new("TextLabel")
-promptLabel.Size = UDim2.new(0.5, 0, 1, 0)
-promptLabel.BackgroundTransparency = 1
-promptLabel.TextColor3 = COLORS.textDim
-promptLabel.TextXAlignment = Enum.TextXAlignment.Left
-promptLabel.Font = Enum.Font.GothamMedium
-promptLabel.TextSize = 11
-promptLabel.Text = "AI bootstrap prompt"
-promptLabel.Parent = promptHeader
-
-local promptRuButton = Instance.new("TextButton")
-promptRuButton.Size = UDim2.new(0, 54, 0, 24)
-promptRuButton.Position = UDim2.new(1, -116, 0, 2)
-promptRuButton.Text = "RU"
-promptRuButton.Parent = promptHeader
-styleButton(promptRuButton, COLORS.secondary)
-insetText(promptRuButton, 8, 8)
-
-local promptEnButton = Instance.new("TextButton")
-promptEnButton.Size = UDim2.new(0, 54, 0, 24)
-promptEnButton.Position = UDim2.new(1, -56, 0, 2)
-promptEnButton.Text = "EN"
-promptEnButton.Parent = promptHeader
-styleButton(promptEnButton, COLORS.surfaceElevated)
-insetText(promptEnButton, 8, 8)
-
-local promptBox = Instance.new("TextBox")
-promptBox.Size = UDim2.new(1, -4, 0, 250)
-promptBox.BackgroundColor3 = COLORS.surfaceAlt
-promptBox.TextColor3 = COLORS.textMain
-promptBox.TextXAlignment = Enum.TextXAlignment.Left
-promptBox.TextYAlignment = Enum.TextYAlignment.Top
-promptBox.ClearTextOnFocus = false
-promptBox.TextEditable = false
-promptBox.MultiLine = true
-promptBox.Font = Enum.Font.Code
-promptBox.TextSize = 11
-promptBox.Parent = helperScroll
-insetText(promptBox, 10, 10)
-local promptCorner = Instance.new("UICorner")
-promptCorner.CornerRadius = UDim.new(0, 8)
-promptCorner.Parent = promptBox
+toggleButton.Visible = false
 
 local sessionLabel = Instance.new("TextLabel")
 sessionLabel.Size = UDim2.new(0.52, -9, 0, 16)
@@ -784,7 +423,7 @@ sessionLabel.Text = "Session: offline"
 sessionLabel.Parent = headerCard
 
 local state = {
-	enabled = false,
+	enabled = true,
 	sessionId = nil,
 	clientId = plugin:GetSetting("rbxmcp_client_id"),
 	loopStarted = false,
@@ -795,13 +434,8 @@ local state = {
 	lastWarningAt = nil,
 	lastCommandContext = nil,
 	connectionState = "idle",
-	uiDiagExpanded = (plugin:GetSetting("rbxmcp_ui_diag_expanded") == true),
-	uiLogExpanded = (plugin:GetSetting("rbxmcp_ui_log_expanded") ~= false),
-	uiAdvancedExpanded = true,
 	logEntries = {},
 	logDropped = 0,
-	logRenderScheduled = false,
-	logExpandedMap = {},
 	bridgePort = plugin:GetSetting("rbxmcp_bridge_port"),
 	bridgeHost = plugin:GetSetting("rbxmcp_bridge_host"),
 	bridgeScheme = plugin:GetSetting("rbxmcp_bridge_scheme"),
@@ -819,8 +453,11 @@ local state = {
 	lastErrorSignatureAt = 0,
 	projectProfileKey = nil,
 	projectProfiles = {},
-	activePage = "main",
-	helperLanguage = "RU",
+	launcherAvailable = false,
+	launcherProfileId = plugin:GetSetting("rbxmcp_last_profile_id"),
+	launcherProfileName = nil,
+	launcherProfileStatus = "manual",
+	launcherManaged = false,
 }
 
 if type(state.clientId) ~= "string" or state.clientId == "" then
@@ -1248,37 +885,6 @@ function DraftAccess.writeSource(scriptInstance, newSource)
 	return true, nil, nil, DraftAccess.WRITE_CHANNEL, nil, nil
 end
 
-local function buildDiagnosticCopy(kind, message, at)
-	local ctx = state.lastCommandContext
-	local lines = {
-		string.format("[%s] %s", kind, tostring(at or nowIso())),
-		tostring(message or "-"),
-	}
-	if type(ctx) == "table" then
-		table.insert(lines, "")
-		table.insert(lines, "Context:")
-		if ctx.command then
-			table.insert(lines, "  command: " .. tostring(ctx.command))
-		end
-		if ctx.endpoint then
-			table.insert(lines, "  endpoint: " .. tostring(ctx.endpoint))
-		end
-		if ctx.path then
-			table.insert(lines, "  path: " .. tostring(ctx.path))
-		end
-	end
-	return table.concat(lines, "\n")
-end
-
-local function buildServerCommandText()
-	local placeId = tostring(tonumber(game.PlaceId) or 0)
-	return table.concat({
-		"cd <path-to-rbxmcp>",
-		string.format('$env:RBXMCP_PORT="%s"', tostring(state.bridgePort or "5100")),
-		string.format('$env:RBXMCP_EXPECT_PLACE_ID="%s"', placeId),
-		"npm.cmd run dev",
-	}, "\n")
-end
 
 local function buildAgentPrompt(language)
 	local baseUrl = tostring(state.bridgeBaseUrl or CONFIG.DEFAULT_BRIDGE_URL):gsub("/v1/studio$", "")
@@ -1307,20 +913,10 @@ local function buildAgentPrompt(language)
 end
 
 local function updateHelperUi()
-	quickStartButton.Text = state.activePage == "helper" and "Back" or "Quick Start"
-	serverCommandBox.Text = buildServerCommandText()
-	promptBox.Text = buildAgentPrompt(state.helperLanguage)
-	promptRuButton.BackgroundColor3 = state.helperLanguage == "RU" and COLORS.primary or COLORS.surfaceElevated
-	promptEnButton.BackgroundColor3 = state.helperLanguage == "EN" and COLORS.primary or COLORS.surfaceElevated
 end
 
 local function setActivePage(pageName)
-	state.activePage = pageName == "helper" and "helper" or "main"
-	updateHelperUi()
-	local targetMain = state.activePage == "main" and UDim2.fromScale(0, 0) or UDim2.fromScale(-1, 0)
-	local targetHelper = state.activePage == "helper" and UDim2.fromScale(0, 0) or UDim2.fromScale(1, 0)
-	tween(mainPage, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Position = targetMain })
-	tween(helperPage, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Position = targetHelper })
+	state.activePage = "main"
 end
 
 local renderLogEntries
@@ -1342,116 +938,9 @@ local function shouldLogEvent(level, category, title)
 end
 
 local function scheduleLogRender()
-	if state.logRenderScheduled then
-		return
-	end
-	state.logRenderScheduled = true
-	task.delay(CONFIG.LOG_RENDER_THROTTLE, function()
-		state.logRenderScheduled = false
-		renderLogEntries()
-	end)
 end
 
 renderLogEntries = function()
-	for _, child in ipairs(logScroll:GetChildren()) do
-		if child:IsA("Frame") then
-			child:Destroy()
-		end
-	end
-
-	local visualIndex = 0
-	for index = #state.logEntries, 1, -1 do
-		local item = state.logEntries[index]
-		local expanded = state.logExpandedMap[index] == true
-		visualIndex = visualIndex + 1
-
-		local row = Instance.new("Frame")
-		row.Size = UDim2.new(1, 0, 0, expanded and 82 or 30)
-		row.BackgroundColor3 = (visualIndex % 2 == 0) and COLORS.surface or COLORS.surfaceAlt
-		row.BackgroundTransparency = visualIndex == 1 and 0.16 or 0
-		row.BorderSizePixel = 0
-		row.Parent = logScroll
-		local rowCorner = Instance.new("UICorner")
-		rowCorner.CornerRadius = UDim.new(0, 6)
-		rowCorner.Parent = row
-		if visualIndex == 1 then
-			tween(row, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				BackgroundTransparency = 0,
-			})
-		end
-
-		local tint = COLORS.info
-		if item.level == "warn" then
-			tint = COLORS.warn
-		elseif item.level == "error" then
-			tint = COLORS.danger
-		end
-
-		local stripe = Instance.new("Frame")
-		stripe.Size = UDim2.new(0, 3, 1, 0)
-		stripe.BackgroundColor3 = tint
-		stripe.BorderSizePixel = 0
-		stripe.Parent = row
-
-		local timestamp = Instance.new("TextBox")
-		timestamp.Size = UDim2.new(0, 112, 0, 18)
-		timestamp.Position = UDim2.new(0, 12, 0, 6)
-		timestamp.BackgroundTransparency = 1
-		timestamp.Font = Enum.Font.Code
-		timestamp.TextSize = 9
-		timestamp.TextColor3 = COLORS.textMuted
-		timestamp.TextXAlignment = Enum.TextXAlignment.Left
-		timestamp.ClearTextOnFocus = false
-		timestamp.TextEditable = false
-		timestamp.Text = tostring(item.time)
-		timestamp.Parent = row
-
-		local header = Instance.new("TextBox")
-		header.Size = UDim2.new(1, -206, 0, 18)
-		header.Position = UDim2.new(0, 126, 0, 6)
-		header.BackgroundTransparency = 1
-		header.Font = Enum.Font.GothamMedium
-		header.TextSize = 10
-		header.TextColor3 = COLORS.textMain
-		header.TextXAlignment = Enum.TextXAlignment.Left
-		header.ClearTextOnFocus = false
-		header.TextEditable = false
-		header.Text = string.format("[%s] %s", item.category, item.title)
-		header.Parent = row
-
-		local expand = Instance.new("TextButton")
-		expand.Size = UDim2.new(0, 74, 0, 20)
-		expand.Position = UDim2.new(1, -78, 0, 5)
-		expand.Text = expanded and "Less" or "More"
-		expand.Parent = row
-		styleButton(expand, COLORS.secondary)
-		insetText(expand, 8, 8)
-		expand.MouseButton1Click:Connect(function()
-			state.logExpandedMap[index] = not expanded
-			renderLogEntries()
-		end)
-
-		if expanded then
-			local detailsBox = Instance.new("TextBox")
-			detailsBox.Size = UDim2.new(1, -24, 0, 46)
-			detailsBox.Position = UDim2.new(0, 12, 0, 30)
-			detailsBox.BackgroundTransparency = 1
-			detailsBox.Font = Enum.Font.Code
-			detailsBox.TextSize = 10
-			detailsBox.TextWrapped = true
-			detailsBox.TextYAlignment = Enum.TextYAlignment.Top
-			detailsBox.TextXAlignment = Enum.TextXAlignment.Left
-			detailsBox.TextColor3 = COLORS.textDim
-			detailsBox.ClearTextOnFocus = false
-			detailsBox.TextEditable = false
-			detailsBox.Text = item.details ~= "" and item.details or "(no details)"
-			detailsBox.Parent = row
-		end
-	end
-
-	logCountLabel.Text = string.format("%d entries", #state.logEntries)
-	logDroppedLabel.Visible = state.logDropped > 0
-	logDroppedLabel.Text = state.logDropped > 0 and string.format("Dropped: %d", state.logDropped) or ""
 end
 
 local function currentTraceContext()
@@ -1529,19 +1018,14 @@ local function updateResponsiveLayout()
 	local topPadding = 24
 	local bodyGap = 10
 	local baseHeaderHeight = narrow and 144 or 128
-	local baseConnectionHeight = narrow and 258 or 224
-	local diagnosticsHeight = state.uiDiagExpanded and (narrow and 224 or 192) or (narrow and 186 or 154)
-	local minimumLogHeight = state.uiLogExpanded and 150 or 68
+	local baseConnectionHeight = narrow and 126 or 112
 	local bodyHeight = math.max(120, height - topPadding - baseHeaderHeight - bodyGap)
-	local remainingLogHeight = bodyHeight - 20 - baseConnectionHeight - diagnosticsHeight
-	local logHeight = state.uiLogExpanded and math.max(minimumLogHeight, remainingLogHeight) or minimumLogHeight
 	local cardWidth = UDim2.new(1, 0, 0, 0)
 
 	headerCard.Size = UDim2.new(cardWidth.X.Scale, cardWidth.X.Offset, 0, baseHeaderHeight)
 	bodyFrame.Size = UDim2.new(1, 0, 0, bodyHeight)
 	title.Size = UDim2.new(1, -230, 0, narrow and 48 or 26)
 	title.TextWrapped = narrow
-	quickStartButton.Position = UDim2.new(1, -118, 0, 12)
 	creditLabel.Position = UDim2.new(0, 96, 0, narrow and 62 or 44)
 	statusBadge.Position = UDim2.new(0, 96, 0, narrow and 88 or 68)
 	statusLabel.Position = UDim2.new(0, 9, 0, baseHeaderHeight - 36)
@@ -1550,95 +1034,30 @@ local function updateResponsiveLayout()
 	sessionLabel.Position = UDim2.new(0.58, 0, 0, baseHeaderHeight - 36)
 
 	connectionCard.Size = UDim2.new(cardWidth.X.Scale, cardWidth.X.Offset, 0, baseConnectionHeight)
-	advancedToggleButton.Visible = false
-	advancedFrame.Position = UDim2.new(0, 9, 0, 148)
-	if narrow then
-		hostInput.Size = UDim2.new(1, 0, 0, 30)
-		hostInput.Position = UDim2.new(0, 0, 0, 0)
-		schemeInput.Size = UDim2.new(1, 0, 0, 30)
-		schemeInput.Position = UDim2.new(0, 0, 0, 36)
-		actionRow.Size = UDim2.new(1, -18, 0, 66)
-		reconnectButton.Size = UDim2.new(0.5, -3, 0, 30)
-		reconnectButton.Position = UDim2.new(0, 0, 0, 0)
-		pingButton.Size = UDim2.new(0.5, -3, 0, 30)
-		pingButton.Position = UDim2.new(0.5, 3, 0, 0)
-		toggleButton.Size = UDim2.new(1, 0, 0, 30)
-		toggleButton.Position = UDim2.new(0, 0, 0, 36)
-	else
-		hostInput.Size = UDim2.new(0.68, -4, 0, 30)
-		hostInput.Position = UDim2.new(0, 0, 0, 0)
-		schemeInput.Size = UDim2.new(0.32, -2, 0, 30)
-		schemeInput.Position = UDim2.new(0.68, 6, 0, 0)
-		actionRow.Size = UDim2.new(1, -18, 0, 30)
-		reconnectButton.Size = UDim2.new(0.34, -6, 1, 0)
-		reconnectButton.Position = UDim2.new(0, 0, 0, 0)
-		pingButton.Size = UDim2.new(0.33, -6, 1, 0)
-		pingButton.Position = UDim2.new(0.34, 3, 0, 0)
-		toggleButton.Size = UDim2.new(0.33, -6, 1, 0)
-		toggleButton.Position = UDim2.new(0.67, 6, 0, 0)
-	end
-	advancedFrame.Size = UDim2.new(1, -18, 0, narrow and 66 or 32)
-	actionRow.Position = UDim2.new(0, 9, 0, narrow and 220 or 186)
-
-	diagnosticsCard.Size = UDim2.new(cardWidth.X.Scale, cardWidth.X.Offset, 0, diagnosticsHeight)
-	diagnosticsToggle.Position = UDim2.new(1, -165, 0, 6)
-	local diagTop = 38
-	local diagGap = 10
-	local diagInnerWidth = width - 42
-	local panelWidth = math.max(120, math.floor((diagInnerWidth - diagGap) / 2))
-	local panelHeight = math.max(54, diagnosticsHeight - 96)
-	errorLabel.Size = UDim2.new(0, panelWidth, 0, 16)
-	errorLabel.Position = UDim2.new(0, 9, 0, diagTop)
-	warningLabel.Size = UDim2.new(0, panelWidth, 0, 16)
-	warningLabel.Position = UDim2.new(0, 9 + panelWidth + diagGap, 0, diagTop)
-	errorDetailsBox.Size = UDim2.new(0, panelWidth, 0, panelHeight)
-	errorDetailsBox.Position = UDim2.new(0, 9, 0, diagTop + 20)
-	warningDetailsBox.Size = UDim2.new(0, panelWidth, 0, panelHeight)
-	warningDetailsBox.Position = UDim2.new(0, 9 + panelWidth + diagGap, 0, diagTop + 20)
-	clearDiagnosticsButton.Position = UDim2.new(0, 9, 1, -30)
-
-	logCard.Size = UDim2.new(cardWidth.X.Scale, cardWidth.X.Offset, 0, logHeight)
-	logContainer.Size = UDim2.new(1, -18, 1, -64)
-	logContainer.Position = UDim2.new(0, 9, 0, 56)
-	helperCard.Size = UDim2.fromScale(1, 1)
-	helperScroll.Size = UDim2.new(1, -18, 1, -44)
-	promptBox.Size = UDim2.new(1, -4, 0, math.max(220, bodyHeight - 220))
+	actionRow.Size = UDim2.new(1, -18, 0, 0)
+	actionRow.Position = UDim2.new(0, 9, 0, 0)
 end
 
 local function updateAdvancedUi()
-	state.uiAdvancedExpanded = true
-	advancedFrame.Visible = true
-	hostInput.Visible = true
-	schemeInput.Visible = true
-	advancedToggleButton.Visible = false
+	fullUrlLabel.Text = "Profile / mode"
 end
 
 local function updateDiagnosticsUi()
-	errorDetailsBox.Visible = true
-	warningDetailsBox.Visible = true
-	diagnosticsToggle.Text = state.uiDiagExpanded and "Compact diagnostics" or "Expand diagnostics"
 end
 
 local function updateLogUi()
-	logContainer.Visible = state.uiLogExpanded
-	logToggleButton.Text = state.uiLogExpanded and "Collapse" or "Expand"
 end
 
 updateUi = function()
-	toggleButton.Text = state.enabled and "Bridge: ON" or "Bridge: OFF"
-	toggleButton.BackgroundColor3 = state.enabled and COLORS.success or COLORS.textDim
-	statusLabel.Text = state.enabled and "Status: running" or "Status: paused"
-	syncLabel.Text = "Last sync: " .. (state.lastSync or "never")
-	errorLabel.Text = "Last error: " .. shortText(state.lastError or "-", 180)
-	warningLabel.Text = "Last warning: " .. shortText(state.lastWarning or "-", 180)
-	sessionLabel.Text = "Session: " .. (state.sessionId or "offline")
+	local profileName = state.launcherProfileName or "Custom port"
+	local profileMode = state.launcherAvailable and (state.launcherProfileName and ("Launcher profile: " .. state.launcherProfileName) or "Launcher online | custom port") or "Manual port mode"
+	statusLabel.Text = "Status: " .. tostring(state.connectionState or "idle")
+	syncLabel.Text = "Port " .. tostring(state.bridgePort) .. " | " .. (state.launcherAvailable and "launcher ready" or "manual")
+	sessionLabel.Text = "Profile: " .. profileName
+	portLabel.Text = "Port"
+	urlLabel.Text = "Project Bridge (port only)"
 	urlInput.Text = state.bridgePort
-	hostInput.Text = state.bridgeHost
-	schemeInput.Text = state.bridgeScheme
-	fullUrlPreview.Text = state.bridgeBaseUrl
-	errorDetailsBox.Text = buildDiagnosticCopy("error", state.lastError, state.lastErrorAt)
-	warningDetailsBox.Text = buildDiagnosticCopy("warning", state.lastWarning, state.lastWarningAt)
-	updateHelperUi()
+	fullUrlPreview.Text = profileMode .. " | status " .. tostring(state.launcherProfileStatus or "manual")
 	updateAdvancedUi()
 	updateDiagnosticsUi()
 	updateLogUi()
@@ -1647,6 +1066,8 @@ updateUi = function()
 		applyConnectionState("online")
 	elseif state.connectionState == "error" then
 		applyConnectionState("error")
+	elseif state.connectionState == "connecting" then
+		applyConnectionState("connecting")
 	else
 		applyConnectionState("idle")
 	end
@@ -1773,6 +1194,101 @@ end
 
 local function bridgeRootUrl()
 	return state.bridgeBaseUrl:gsub("/v1/studio$", "")
+end
+
+local function requestAbsoluteJson(url, method, payload)
+	local requestOptions = {
+		Url = url,
+		Method = method or "GET",
+	}
+	if payload ~= nil then
+		requestOptions.Headers = {
+			["Content-Type"] = "application/json",
+		}
+		requestOptions.Body = HttpService:JSONEncode(payload)
+	end
+	local okReq, response = pcall(function()
+		return HttpService:RequestAsync(requestOptions)
+	end)
+	if not okReq then
+		return false, "Request failed: " .. tostring(response)
+	end
+	if not response.Success then
+		return false, string.format("HTTP %s: %s", tostring(response.StatusCode), tostring(response.Body))
+	end
+	if type(response.Body) ~= "string" or response.Body == "" then
+		return true, {}
+	end
+	local okDecode, decoded = pcall(function()
+		return HttpService:JSONDecode(response.Body)
+	end)
+	if not okDecode then
+		return false, "Invalid JSON response"
+	end
+	return true, decoded
+end
+
+local function launcherRequest(path, method, payload)
+	return requestAbsoluteJson(CONFIG.LAUNCHER_CONTROL_URL .. path, method or "GET", payload)
+end
+
+local function refreshLauncherProfileState(port)
+	state.launcherAvailable = false
+	state.launcherProfileName = nil
+	state.launcherProfileStatus = "manual"
+	state.launcherManaged = false
+	local okHealth, _ = launcherRequest("/health", "GET")
+	if not okHealth then
+		state.launcherProfileId = nil
+		return false
+	end
+	state.launcherAvailable = true
+	local okResolve, resolved = launcherRequest("/resolve-by-port", "POST", {
+		port = tostring(port or state.bridgePort or ""),
+	})
+	if not okResolve or type(resolved) ~= "table" or resolved.found ~= true or type(resolved.profile) ~= "table" then
+		state.launcherProfileId = nil
+		plugin:SetSetting("rbxmcp_last_profile_id", "")
+		return true
+	end
+	state.launcherProfileId = tostring(resolved.profile.id or "")
+	state.launcherProfileName = tostring(resolved.profile.name or "")
+	if type(resolved.status) == "table" then
+		state.launcherProfileStatus = tostring(resolved.status.status or "manual")
+		state.launcherManaged = resolved.status.managed == true
+	else
+		state.launcherProfileStatus = "manual"
+		state.launcherManaged = false
+	end
+	plugin:SetSetting("rbxmcp_last_profile_id", state.launcherProfileId)
+	return true
+end
+
+local function startLauncherProfileForCurrentPort()
+	if not refreshLauncherProfileState(state.bridgePort) then
+		return false, "Launcher is unavailable"
+	end
+	if type(state.launcherProfileId) ~= "string" or state.launcherProfileId == "" then
+		return false, "No launcher profile is mapped to port " .. tostring(state.bridgePort)
+	end
+	local okStart, response = launcherRequest("/profiles/" .. state.launcherProfileId .. "/start", "POST", {})
+	if not okStart then
+		return false, response
+	end
+	refreshLauncherProfileState(state.bridgePort)
+	return true, response
+end
+
+local function stopLauncherProfileForCurrentPort()
+	if not state.launcherAvailable or type(state.launcherProfileId) ~= "string" or state.launcherProfileId == "" then
+		return false, "No launcher-managed profile is active"
+	end
+	local okStop, response = launcherRequest("/profiles/" .. state.launcherProfileId .. "/stop", "POST", {})
+	if not okStop then
+		return false, response
+	end
+	refreshLauncherProfileState(state.bridgePort)
+	return true, response
 end
 
 local function pingBridge()
@@ -3592,10 +3108,11 @@ local function applyConnectionInputs(clearError)
 	portErrorLabel.Text = ""
 
 	state.bridgePort = parsedPort
-	state.bridgeHost = normalizeHost(hostInput.Text)
-	state.bridgeScheme = normalizeScheme(schemeInput.Text)
+	state.bridgeHost = normalizeHost(state.bridgeHost or "127.0.0.1")
+	state.bridgeScheme = normalizeScheme(state.bridgeScheme or "http")
 	state.bridgeBaseUrl = buildBridgeBaseUrl(state.bridgeScheme, state.bridgeHost, state.bridgePort)
 	persistBridgeSettings()
+	refreshLauncherProfileState(state.bridgePort)
 	state.sessionId = nil
 	if clearError then
 		state.lastError = nil
@@ -3607,105 +3124,68 @@ local function applyConnectionInputs(clearError)
 end
 
 toggleButton.MouseButton1Click:Connect(function()
-	state.enabled = not state.enabled
-	if not state.enabled then
-		state.sessionId = nil
-		state.connectionState = "idle"
-	end
-	addLog("info", "ui", "Bridge toggled", state.enabled and "enabled" or "disabled")
-	updateUi()
+	task.spawn(function()
+		if state.enabled then
+			if state.launcherAvailable and state.launcherManaged then
+				local okStop, stopErr = stopLauncherProfileForCurrentPort()
+				if not okStop then
+					setWarning("Launcher stop skipped: " .. tostring(stopErr))
+				end
+			end
+			state.enabled = false
+			state.sessionId = nil
+			state.connectionState = "idle"
+			addLog("info", "ui", "Bridge toggled", "stopped")
+			updateUi()
+			return
+		end
+		if not applyConnectionInputs(true) then
+			return
+		end
+		state.connectionState = "connecting"
+		updateUi()
+		if state.launcherAvailable and state.launcherProfileId then
+			local okStart, startErr = startLauncherProfileForCurrentPort()
+			if not okStart then
+				setError("Launcher start failed: " .. tostring(startErr))
+				return
+			end
+		end
+		state.enabled = true
+		addLog("info", "ui", "Bridge toggled", state.launcherProfileId and "launcher start" or "manual connect")
+		local okReconnect = reconnectNow()
+		if not okReconnect then
+			state.enabled = true
+		end
+		updateUi()
+	end)
 end)
 
 urlInput.FocusLost:Connect(function(enterPressed)
-	if not enterPressed then
+	local changed = tostring(urlInput.Text or "") ~= tostring(state.bridgePort or "")
+	if not enterPressed and not changed then
 		urlInput.Text = state.bridgePort
 		return
 	end
-	applyConnectionInputs(true)
-end)
-
-hostInput.FocusLost:Connect(function(enterPressed)
-	if not enterPressed then
-		hostInput.Text = state.bridgeHost
-		return
-	end
-	applyConnectionInputs(false)
-end)
-
-schemeInput.FocusLost:Connect(function(enterPressed)
-	if not enterPressed then
-		schemeInput.Text = state.bridgeScheme
-		return
-	end
-	applyConnectionInputs(false)
-end)
-
-diagnosticsToggle.MouseButton1Click:Connect(function()
-	state.uiDiagExpanded = not state.uiDiagExpanded
-	plugin:SetSetting("rbxmcp_ui_diag_expanded", state.uiDiagExpanded)
-	updateUi()
-end)
-
-clearDiagnosticsButton.MouseButton1Click:Connect(function()
-	state.lastError = nil
-	state.lastErrorAt = nil
-	state.lastWarning = nil
-	state.lastWarningAt = nil
-	addLog("info", "ui", "Diagnostics cleared", "")
-	updateUi()
-end)
-
-logToggleButton.MouseButton1Click:Connect(function()
-	state.uiLogExpanded = not state.uiLogExpanded
-	plugin:SetSetting("rbxmcp_ui_log_expanded", state.uiLogExpanded)
-	updateUi()
-end)
-
-clearLogButton.MouseButton1Click:Connect(function()
-	state.logEntries = {}
-	state.logDropped = 0
-	state.logExpandedMap = {}
-	renderLogEntries()
+	task.spawn(function()
+		if applyConnectionInputs(true) then
+			reconnectNow()
+			updateUi()
+		end
+	end)
 end)
 
 reconnectButton.MouseButton1Click:Connect(function()
-	if applyConnectionInputs(true) then
-		reconnectNow()
-	end
-end)
-
-pingButton.MouseButton1Click:Connect(function()
-	if not applyConnectionInputs(false) then
-		return
-	end
-	local okPing, pingErr = pingBridge()
-	if okPing then
-		state.lastError = nil
-		state.lastErrorAt = nil
-		state.connectionState = "online"
-		state.lastSync = nowIso()
-		updateUi()
-	else
-		setError(pingErr)
-	end
+	task.spawn(function()
+		if applyConnectionInputs(true) then
+			reconnectNow()
+			updateUi()
+		end
+	end)
 end)
 
 openButton.Click:Connect(function()
 	widget.Enabled = not widget.Enabled
-end)
-
-quickStartButton.MouseButton1Click:Connect(function()
-	setActivePage(state.activePage == "helper" and "main" or "helper")
-end)
-
-promptRuButton.MouseButton1Click:Connect(function()
-	state.helperLanguage = "RU"
-	updateHelperUi()
-end)
-
-promptEnButton.MouseButton1Click:Connect(function()
-	state.helperLanguage = "EN"
-	updateHelperUi()
 end)
 
 widget:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
@@ -3713,5 +3193,10 @@ widget:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
 end)
 
 addLog("info", "ui", "Plugin initialized", state.bridgeBaseUrl)
+task.spawn(function()
+	refreshLauncherProfileState(state.bridgePort)
+	reconnectNow()
+	safeUpdateUi()
+end)
 updateUi()
 ensureLoop()

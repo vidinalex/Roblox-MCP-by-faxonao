@@ -7,6 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx server/src/index.ts",
     "start": "node server/dist/index.js",
+    "launcher": "electron launcher/main.mjs",
+    "launcher:dev": "electron launcher/main.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "rbxmcp:request": "node tools/rbxmcp-request.mjs"
@@ -24,6 +26,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.3.3",
     "@types/supertest": "^7.2.0",
+    "electron": "^37.2.0",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

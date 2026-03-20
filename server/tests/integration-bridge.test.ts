@@ -453,6 +453,126 @@ describe("bridge integration", () => {
     expect(error?.code).toBe("write_verification_failed");
   });
 
+  it("accepts full replacement tags on update_script_metadata over the public contract", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ReplicatedStorage", "Metadata", "Taggable"];
+    const source = "return true\n";
+
+    await seedScripts(api, bridge, sessionId, [{ path, class: "ModuleScript", source }]);
+
+    const responsePromise = api.post("/v1/agent/update_script_metadata").send({
+      path: "ReplicatedStorage/Metadata/Taggable",
+      expectedHash: sourceHash(source),
+      tags: ["AE_TagOne", "AE_TagTwo"],
+      attributes: { Enabled: true }
+    }).then((response) => response);
+
+    const refreshBeforeWrite = await pollOne(api, sessionId);
+    expect(refreshBeforeWrite.type).toBe("snapshot_script_by_path");
+    await pushPartial(api, sessionId, path, source);
+    await complete(api, sessionId, refreshBeforeWrite.commandId);
+
+    const metadataWrite = await pollOne(api, sessionId);
+    expect(metadataWrite.type).toBe("set_script_metadata_if_hash");
+    expect((metadataWrite.payload as { addTags: string[] }).addTags).toEqual(["AE_TagOne", "AE_TagTwo"]);
+    expect((metadataWrite.payload as { removeTags: string[] }).removeTags).toEqual([]);
+    await complete(api, sessionId, metadataWrite.commandId, {
+      path,
+      hash: sourceHash(source),
+      className: "ModuleScript",
+      draftAware: true,
+      readChannel: "editor",
+      tags: ["AE_TagOne", "AE_TagTwo"],
+      attributes: { Enabled: true }
+    });
+
+    const verifyRefresh = await pollOne(api, sessionId);
+    expect(verifyRefresh.type).toBe("snapshot_script_by_path");
+    const verifyResponse = await api.post("/v1/studio/push_snapshot").send({
+      sessionId,
+      mode: "partial",
+      scripts: [{
+        path,
+        class: "ModuleScript",
+        source,
+        readChannel: "editor",
+        draftAware: true,
+        tags: ["AE_TagOne", "AE_TagTwo"],
+        attributes: { Enabled: true }
+      }]
+    });
+    expect(verifyResponse.status).toBe(200);
+    await complete(api, sessionId, verifyRefresh.commandId);
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(response.body.tags).toEqual(["AE_TagOne", "AE_TagTwo"]);
+    expect(response.body.attributes.Enabled).toBe(true);
+  });
+
+  it("accepts full replacement tags on update_ui_metadata over the public contract", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const root = {
+      path: ["StarterGui", "MainGui"],
+      service: "StarterGui",
+      name: "MainGui",
+      className: "ScreenGui",
+      version: "ui-tag-root-v1",
+      updatedAt: new Date().toISOString(),
+      props: {},
+      tags: [],
+      attributes: {},
+      unsupportedProperties: [],
+      children: []
+    };
+
+    const uiListPromise = bridge.listUiRoots();
+    const snapshotAll = await pollOne(api, sessionId);
+    expect(snapshotAll.type).toBe("snapshot_ui_roots");
+    await pushUiRoots(api, sessionId, [root], "all");
+    await complete(api, sessionId, snapshotAll.commandId, { count: 1 });
+    await uiListPromise;
+
+    const responsePromise = api.post("/v1/agent/update_ui_metadata").send({
+      path: "StarterGui/MainGui",
+      expectedVersion: "ui-tag-root-v1",
+      tags: ["AE_UiTag"],
+      attributes: { Panel: "main" }
+    }).then((response) => response);
+
+    const refreshBeforeWrite = await pollOne(api, sessionId);
+    expect(refreshBeforeWrite.type).toBe("snapshot_ui_subtree_by_path");
+    await pushUiRoots(api, sessionId, [root], "partial");
+    await complete(api, sessionId, refreshBeforeWrite.commandId, { version: root.version });
+
+    const metadataWrite = await pollOne(api, sessionId);
+    expect(metadataWrite.type).toBe("mutate_ui_batch_if_version");
+    const operations = metadataWrite.payload.operations as Array<Record<string, unknown>>;
+    expect(operations[0].op).toBe("update_metadata");
+    expect(operations[0].addTags).toEqual(["AE_UiTag"]);
+    expect(operations[0].removeTags).toEqual([]);
+    await complete(api, sessionId, metadataWrite.commandId, { ok: true });
+
+    const updatedRoot = {
+      ...root,
+      version: "ui-tag-root-v2",
+      updatedAt: new Date().toISOString(),
+      tags: ["AE_UiTag"],
+      attributes: { Panel: "main" }
+    };
+    const refreshAfterWrite = await pollOne(api, sessionId);
+    expect(refreshAfterWrite.type).toBe("snapshot_ui_subtree_by_path");
+    await pushUiRoots(api, sessionId, [updatedRoot], "partial");
+    await complete(api, sessionId, refreshAfterWrite.commandId, { version: updatedRoot.version });
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(response.body.node.tags).toEqual(["AE_UiTag"]);
+    expect(response.body.node.attributes.Panel).toBe("main");
+  });
+
   it("handles multiple sequential updates of the same script", async () => {
     const { api, bridge } = await createContext();
     const sessionId = await hello(api);

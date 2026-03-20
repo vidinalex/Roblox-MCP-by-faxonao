@@ -204,6 +204,7 @@ const agentMoveScriptSchema = z.object({
 const agentUpdateScriptMetadataSchema = z.object({
   path: z.array(z.string().min(1)).min(2),
   expectedHash: z.string().min(1),
+  tags: z.array(z.string().min(1)).optional(),
   addTags: z.array(z.string().min(1)).optional(),
   removeTags: z.array(z.string().min(1)).optional(),
   attributes: attributeMapSchema.optional(),
@@ -424,6 +425,7 @@ const agentUpdateUiSchema = z.object({
 const agentUpdateUiMetadataSchema = z.object({
   path: z.array(z.string().min(1)).min(2),
   expectedVersion: z.string().min(1),
+  tags: z.array(z.string().min(1)).optional(),
   addTags: z.array(z.string().min(1)).optional(),
   removeTags: z.array(z.string().min(1)).optional(),
   attributes: attributeMapSchema.optional(),

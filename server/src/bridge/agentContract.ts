@@ -119,12 +119,13 @@ export const agentContracts = {
   update_script_metadata: contract("POST", "/v1/agent/update_script_metadata", "rbx_update_script_metadata", z.object({
     path: publicPathSchema,
     expectedHash: z.string().min(1),
+    tags: z.array(z.string().min(1)).optional(),
     addTags: z.array(z.string().min(1)).optional(),
     removeTags: z.array(z.string().min(1)).optional(),
     attributes: genericUnknownRecordSchema.optional(),
     clearAttributes: z.array(z.string().min(1)).optional(),
     placeId: z.string().min(1).optional()
-  }), [{ path: "ServerScriptService/MainScript", expectedHash: "hash", addTags: ["AE_Library"], attributes: { BootPriority: 10 } }], [PUBLIC_PATH_GOTCHA, "Use hash lock for script metadata writes."]),
+  }), [{ path: "ServerScriptService/MainScript", expectedHash: "hash", tags: ["AE_Library"], attributes: { BootPriority: 10 } }], [PUBLIC_PATH_GOTCHA, "Use `tags` for full replacement or `addTags`/`removeTags` for patch semantics.", "Use hash lock for script metadata writes."]),
   get_project_summary: contract("POST", "/v1/agent/get_project_summary", "rbx_get_project_summary", z.object({
     scope: z.enum(["all", "scripts", "ui"]).default("all"),
     service: z.string().optional(),
@@ -284,12 +285,13 @@ export const agentContracts = {
   update_ui_metadata: contract("POST", "/v1/agent/update_ui_metadata", "rbx_update_ui_metadata", z.object({
     path: publicPathSchema,
     expectedVersion: z.string().min(1),
+    tags: z.array(z.string().min(1)).optional(),
     addTags: z.array(z.string().min(1)).optional(),
     removeTags: z.array(z.string().min(1)).optional(),
     attributes: genericUnknownRecordSchema.optional(),
     clearAttributes: z.array(z.string().min(1)).optional(),
     placeId: z.string().min(1).optional()
-  }), [{ path: "StarterGui/MainGui/BuyButton", expectedVersion: "version", addTags: ["Interactive"], attributes: { ScreenId: "shop" } }], [PUBLIC_PATH_GOTCHA, "Use version lock for UI metadata writes."]),
+  }), [{ path: "StarterGui/MainGui/BuyButton", expectedVersion: "version", tags: ["Interactive"], attributes: { ScreenId: "shop" } }], [PUBLIC_PATH_GOTCHA, "Use `tags` for full replacement or `addTags`/`removeTags` for patch semantics.", "Use version lock for UI metadata writes."]),
   apply_ui_batch: contract("POST", "/v1/agent/apply_ui_batch", "rbx_apply_ui_batch", z.object({
     rootPath: publicPathSchema,
     expectedVersion: z.string().min(1),
