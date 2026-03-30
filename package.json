@@ -7,6 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx server/src/index.ts",
     "start": "node server/dist/index.js",
+    "automation:dev": "node automation/dev.mjs",
     "launcher": "electron launcher/main.mjs",
     "launcher:dev": "electron launcher/main.mjs",
     "test": "vitest run",

@@ -11,10 +11,15 @@
       <div id="activityBar" class="activity-bar" hidden></div>
       <header class="topbar">
         <div class="brand">
-          <div class="brand-mark"></div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M10.4 2h3.2l.45 2.61c.49.14.96.34 1.4.58l2.37-1.17 2.26 2.26-1.17 2.37c.24.44.44.91.58 1.4L22 10.4v3.2l-2.61.45c-.14.49-.34.96-.58 1.4l1.17 2.37-2.26 2.26-2.37-1.17c-.44.24-.91.44-1.4.58L13.6 22h-3.2l-.45-2.61a7.08 7.08 0 0 1-1.4-.58l-2.37 1.17-2.26-2.26 1.17-2.37a7.08 7.08 0 0 1-.58-1.4L2 13.6v-3.2l2.61-.45c.14-.49.34-.96.58-1.4L4.02 6.18l2.26-2.26 2.37 1.17c.44-.24.91-.44 1.4-.58L10.4 2Z" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="3.35" stroke="currentColor" stroke-width="1.45"/>
+            </svg>
+          </div>
           <div>
             <h1>RBXMCP Launcher</h1>
-            <p>Two active Roblox projects, one clean control surface.</p>
+            <p>Stable multi-project control surface for RBXMCP profiles.</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -26,14 +31,10 @@
       <main class="layout">
         <section class="workspace">
           <div class="section-header">
-            <h2>Working Set</h2>
-            <p>Primary cards are pinned or most recently used profiles.</p>
+            <h2>All Profiles</h2>
+            <p>Pinned profiles stay first. Cards keep a fixed grid rhythm instead of stretching into rows.</p>
           </div>
-          <div id="primaryCards" class="primary-grid"></div>
-          <div class="section-header compact">
-            <h3>All Profiles</h3>
-          </div>
-          <div id="profileList" class="profile-list"></div>
+          <div id="profileGrid" class="profile-grid"></div>
         </section>
 
         <aside class="sidebar">
@@ -96,4 +97,4 @@
     </div>
     <script type="module" src="./renderer.mjs"></script>
   </body>
-  </html>
+</html>

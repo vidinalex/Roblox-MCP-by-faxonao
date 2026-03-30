@@ -2,10 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request, { SuperTest, Test } from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BridgeService, BridgeServiceOptions } from "../src/bridge/bridgeService.js";
 import { createBridgeHttpApp } from "../src/bridge/httpApi.js";
 import { CacheStore } from "../src/cache/cacheStore.js";
+import { BridgeError } from "../src/lib/errors.js";
 import { sourceHash } from "../src/lib/hash.js";
 
 interface TestContext {
@@ -158,6 +159,7 @@ async function completeError(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (contexts.length > 0) {
     const ctx = contexts.pop();
     if (ctx) {
@@ -225,6 +227,93 @@ describe("bridge integration", () => {
     expect(commandTimeoutsMs.setScriptSourceIfHash).toBe(45_000);
     expect(commandTimeoutsMs.upsertScript).toBe(45_000);
     expect(commandTimeoutsMs.default).toBe(15_000);
+  });
+
+  it("accepts newSourceBase64 over raw newSource on the public update_script endpoint", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ServerScriptService", "MainScript"];
+    const studioSource = "print('old')";
+    const nextSource = "return 'привет'";
+
+    await seedScripts(api, bridge, sessionId, [{ path, class: "Script", source: studioSource }]);
+
+    const updatePromise = api
+      .post("/v1/agent/update_script")
+      .send({
+        path: "ServerScriptService/MainScript",
+        newSource: "print('wrong')",
+        newSourceBase64: Buffer.from(nextSource, "utf8").toString("base64"),
+        expectedHash: sourceHash(studioSource)
+      })
+      .then((response) => response);
+
+    const writeCommand = await pollOne(api, sessionId);
+    expect(writeCommand.type).toBe("set_script_source_if_hash");
+    expect((writeCommand.payload as { newSource: string }).newSource).toBe(nextSource);
+    expect((writeCommand.payload as { newSourceBase64?: string }).newSourceBase64).toBe(
+      Buffer.from(nextSource, "utf8").toString("base64")
+    );
+
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(nextSource),
+      className: "Script",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+
+    const response = await updatePromise;
+    expect(response.status).toBe(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.source).toBe(nextSource);
+    expect(response.body.hash).toBe(sourceHash(nextSource));
+  });
+
+  it("accepts sourceBase64 over raw source on the public create_script endpoint", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ReplicatedStorage", "Generated", "UnicodeModule"];
+    const source = "return 'модуль'";
+
+    const createPromise = api
+      .post("/v1/agent/create_script")
+      .send({
+        path: "ReplicatedStorage/Generated/UnicodeModule",
+        className: "ModuleScript",
+        source: "return 'wrong'",
+        sourceBase64: Buffer.from(source, "utf8").toString("base64")
+      })
+      .then((response) => response);
+
+    const preRefresh = await pollOne(api, sessionId);
+    expect(preRefresh.type).toBe("snapshot_script_by_path");
+    await completeError(api, sessionId, preRefresh.commandId, "not_found", "Script not found", { path });
+
+    const writeCommand = await pollOne(api, sessionId);
+    expect(writeCommand.type).toBe("upsert_script");
+    expect((writeCommand.payload as { newSource: string }).newSource).toBe(source);
+    expect((writeCommand.payload as { newSourceBase64?: string }).newSourceBase64).toBe(
+      Buffer.from(source, "utf8").toString("base64")
+    );
+
+    await complete(api, sessionId, writeCommand.commandId, {
+      path,
+      hash: sourceHash(source),
+      className: "ModuleScript",
+      writeChannel: "editor",
+      readChannel: "editor",
+      draftAware: true
+    });
+
+    const response = await createPromise;
+    expect(response.status).toBe(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.source).toBe(source);
+
+    const stored = await bridge.getScript(path);
+    expect(stored.source).toBe(source);
   });
 
   it("returns hash_conflict when expected hash is stale", async () => {
@@ -374,6 +463,91 @@ describe("bridge integration", () => {
     expect(writeResult.status).toBe(200);
     expect(writeResult.body.ok).toBe(true);
     expect((await updateError)?.message).toMatch(/unexpected nil dereference/);
+  });
+
+  it("reconciles timed out update writes when forced refresh confirms the expected source", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ServerScriptService", "MainScript"];
+    const initialSource = "local value = 1\nreturn value\n";
+    const nextSource = "local value = 2\nreturn value\n";
+
+    await seedScripts(api, bridge, sessionId, [{ path, class: "Script", source: initialSource }]);
+
+    const queue = (bridge as unknown as {
+      queue: { enqueueDetailed: (type: string, payload: Record<string, unknown>, timeoutMs: number) => unknown };
+    }).queue;
+    vi.spyOn(queue, "enqueueDetailed").mockImplementation(() => ({
+      command: {
+        commandId: "cmd-timeout",
+        type: "set_script_source_if_hash"
+      },
+      result: Promise.resolve().then(() => {
+        throw new BridgeError("timeout", "Command set_script_source_if_hash timed out", 504);
+      })
+    }));
+    vi.spyOn(bridge, "refreshScript").mockResolvedValue({
+      path,
+      className: "Script",
+      source: nextSource,
+      hash: sourceHash(nextSource),
+      updatedAt: new Date().toISOString(),
+      draftAware: true,
+      readChannel: "editor",
+      tags: [],
+      attributes: {}
+    } as Awaited<ReturnType<BridgeService["refreshScript"]>>);
+
+    const updated = await bridge.updateScript(path, nextSource, sourceHash(initialSource));
+    expect(updated.source).toBe(nextSource);
+    expect(updated.hash).toBe(sourceHash(nextSource));
+    expect((updated as Record<string, unknown>).reconciledAfterTimeout).toBe(true);
+    expect((updated as Record<string, unknown>).timedOutDuringPhase).toBe("plugin-exec");
+  });
+
+  it("reports writeState=not_applied when timeout reconciliation finds a different live source", async () => {
+    const { api, bridge } = await createContext();
+    const sessionId = await hello(api);
+    const path = ["ServerScriptService", "MainScript"];
+    const initialSource = "local value = 1\nreturn value\n";
+    const nextSource = "local value = 2\nreturn value\n";
+
+    await seedScripts(api, bridge, sessionId, [{ path, class: "Script", source: initialSource }]);
+
+    const queue = (bridge as unknown as {
+      queue: { enqueueDetailed: (type: string, payload: Record<string, unknown>, timeoutMs: number) => unknown };
+    }).queue;
+    vi.spyOn(queue, "enqueueDetailed").mockImplementation(() => ({
+      command: {
+        commandId: "cmd-timeout",
+        type: "set_script_source_if_hash"
+      },
+      result: Promise.resolve().then(() => {
+        throw new BridgeError("timeout", "Command set_script_source_if_hash timed out", 504);
+      })
+    }));
+    vi.spyOn(bridge, "refreshScript").mockResolvedValue({
+      path,
+      className: "Script",
+      source: initialSource,
+      hash: sourceHash(initialSource),
+      updatedAt: new Date().toISOString(),
+      draftAware: true,
+      readChannel: "editor",
+      tags: [],
+      attributes: {}
+    } as Awaited<ReturnType<BridgeService["refreshScript"]>>);
+
+    const error = await bridge.updateScript(path, nextSource, sourceHash(initialSource)).then(
+      () => null,
+      (value: BridgeError) => value
+    );
+
+    expect(error).toBeTruthy();
+    expect(error?.code).toBe("timeout");
+    expect(error?.details.writeState).toBe("not_applied");
+    expect(error?.details.currentHash).toBe(sourceHash(initialSource));
+    expect(error?.details.expectedHash).toBe(sourceHash(nextSource));
   });
 
   it("verifies multiline update readback before reporting success", async () => {
@@ -703,11 +877,16 @@ describe("bridge integration", () => {
     expect(response.status).toBe(200);
     expect(response.body.ok).toBe(true);
     const getScript = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "get_script");
+    const updateScript = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "update_script");
+    const createScript = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "create_script");
     const updateScriptMetadata = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "update_script_metadata");
     const updateUiMetadata = response.body.endpoints.find((endpoint: { id: string }) => endpoint.id === "update_ui_metadata");
     expect(getScript?.responseSchema?.anyOf).toHaveLength(2);
     expect(getScript.responseSchema.anyOf[0].properties.source.type).toBe("string");
     expect(getScript.responseSchema.anyOf[0].properties.tags.items.type).toBe("string");
+    expect(updateScript?.requestSchema.properties.newSourceBase64.type).toBe("string");
+    expect(createScript?.requestSchema.properties.sourceBase64.type).toBe("string");
+    expect(updateScript?.responseSchema.anyOf[0].properties.reconciledAfterTimeout.type).toBe("boolean");
     expect(updateScriptMetadata?.responseSchema?.anyOf).toHaveLength(2);
     expect(updateScriptMetadata.responseSchema.anyOf[0].properties.attributes.type).toBe("object");
     expect(updateScriptMetadata.responseSchema.anyOf[0].required).toEqual(expect.arrayContaining(["path", "hash", "tags", "attributes"]));

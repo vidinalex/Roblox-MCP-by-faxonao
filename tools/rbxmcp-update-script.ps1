@@ -20,11 +20,12 @@ if (-not (Test-Path -LiteralPath $SourceFile)) {
   throw "Source file not found: $SourceFile"
 }
 
-$source = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $SourceFile), [System.Text.Encoding]::UTF8)
+$resolvedSourceFile = (Resolve-Path -LiteralPath $SourceFile)
+$sourceBytes = [System.IO.File]::ReadAllBytes($resolvedSourceFile)
 $payload = @{
   path = $Path
   expectedHash = $ExpectedHash
-  newSource = $source
+  newSourceBase64 = [System.Convert]::ToBase64String($sourceBytes)
 }
 
 if (-not [string]::IsNullOrWhiteSpace($PlaceId)) {

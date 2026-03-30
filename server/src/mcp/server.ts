@@ -5,11 +5,42 @@ import { buildAgentSchemaDocument, getAgentContractByEndpointPath, parsePublicCo
 import { BridgeService } from "../bridge/bridgeService.js";
 import { BridgeError } from "../lib/errors.js";
 import { serializePublicPayload } from "../lib/publicContract.js";
+import { resolveSourcePayload } from "../lib/sourcePayload.js";
 import { ContentLengthStdioTransport } from "./contentLengthStdioTransport.js";
 
 function textResult(payload: unknown): { content: [{ type: "text"; text: string }] } {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
+  };
+}
+
+function buildScriptWriteResult(script: {
+  path: string[];
+  className: string;
+  hash: string;
+  updatedAt: string;
+  draftAware: boolean;
+  readChannel: string;
+  tags: string[];
+  attributes: Record<string, unknown>;
+  reconciledAfterTimeout?: boolean;
+  timedOutDuringPhase?: "plugin-exec" | "post-refresh";
+}) {
+  return {
+    path: script.path,
+    className: script.className,
+    hash: script.hash,
+    updatedAt: script.updatedAt,
+    draftAware: script.draftAware,
+    readChannel: script.readChannel,
+    tags: script.tags,
+    attributes: script.attributes,
+    ...(script.reconciledAfterTimeout === true
+      ? {
+          reconciledAfterTimeout: true,
+          timedOutDuringPhase: script.timedOutDuringPhase ?? "plugin-exec"
+        }
+      : {})
   };
 }
 
@@ -206,23 +237,17 @@ export function createMcpServer(bridge: BridgeService): McpServer {
         "Hash-locked update. Always refreshes target script before write. Rejects if expectedHash mismatches current Studio hash.",
       inputSchema: {
         path: z.string().min(3),
-        newSource: z.string(),
+        newSource: z.string().optional(),
+        newSourceBase64: z.string().min(1).optional(),
         expectedHash: z.string().min(1),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ path, newSource, expectedHash, placeId }) =>
-      runTool(bridge, "/v1/agent/update_script", "rbx_update_script", { path, newSource, expectedHash, placeId }, async (normalized, trace) => {
-        const updated = await bridge.updateScript(normalized.path, normalized.newSource, normalized.expectedHash, normalized.placeId, trace);
-        return {
-          path: updated.path,
-          hash: updated.hash,
-          updatedAt: updated.updatedAt,
-          draftAware: updated.draftAware,
-          readChannel: updated.readChannel,
-          tags: updated.tags,
-          attributes: updated.attributes
-        };
+    async ({ path, newSource, newSourceBase64, expectedHash, placeId }) =>
+      runTool(bridge, "/v1/agent/update_script", "rbx_update_script", { path, newSource, newSourceBase64, expectedHash, placeId }, async (normalized, trace) => {
+        const source = resolveSourcePayload(normalized.newSource, normalized.newSourceBase64, "newSource", "newSourceBase64");
+        const updated = await bridge.updateScript(normalized.path, source, normalized.expectedHash, normalized.placeId, trace);
+        return buildScriptWriteResult(updated);
       })
   );
 
@@ -233,23 +258,16 @@ export function createMcpServer(bridge: BridgeService): McpServer {
       inputSchema: {
         path: z.string().min(3),
         className: z.enum(["Script", "LocalScript", "ModuleScript"]).default("LocalScript"),
-        source: z.string().default(""),
+        source: z.string().optional(),
+        sourceBase64: z.string().min(1).optional(),
         placeId: z.string().min(1).optional()
       }
     },
-    async ({ path, className, source, placeId }) =>
-      runTool(bridge, "/v1/agent/create_script", "rbx_create_script", { path, className, source, placeId }, async (normalized, trace) => {
-        const created = await bridge.createScript(normalized.path, normalized.className, normalized.source, normalized.placeId, trace);
-        return {
-          path: created.path,
-          className: created.className,
-          hash: created.hash,
-          updatedAt: created.updatedAt,
-          draftAware: created.draftAware,
-          readChannel: created.readChannel,
-          tags: created.tags,
-          attributes: created.attributes
-        };
+    async ({ path, className, source, sourceBase64, placeId }) =>
+      runTool(bridge, "/v1/agent/create_script", "rbx_create_script", { path, className, source, sourceBase64, placeId }, async (normalized, trace) => {
+        const resolvedSource = resolveSourcePayload(normalized.source, normalized.sourceBase64, "source", "sourceBase64");
+        const created = await bridge.createScript(normalized.path, normalized.className, resolvedSource, normalized.placeId, trace);
+        return buildScriptWriteResult(created);
       })
   );
 

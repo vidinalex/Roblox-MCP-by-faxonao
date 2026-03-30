@@ -52,6 +52,30 @@ const patchOpSchema = z.discriminatedUnion("op", [
 ]);
 
 const genericUnknownRecordSchema = z.record(z.string(), z.unknown());
+const sourceFieldPairGotcha = "When both raw source and base64 source are provided, the base64 field wins.";
+const updateScriptRequestSchema = z.object({
+  path: publicPathSchema,
+  newSource: z.string().optional(),
+  newSourceBase64: z.string().min(1).optional(),
+  expectedHash: z.string().min(1),
+  placeId: z.string().min(1).optional()
+}).superRefine((payload, ctx) => {
+  if (Object.prototype.hasOwnProperty.call(payload, "newSource") || typeof payload.newSourceBase64 === "string") {
+    return;
+  }
+  ctx.addIssue({
+    code: "custom",
+    message: "Either newSource or newSourceBase64 is required",
+    path: ["newSource"]
+  });
+});
+const createScriptRequestSchema = z.object({
+  path: publicPathSchema,
+  className: z.enum(["Script", "LocalScript", "ModuleScript"]).default("LocalScript"),
+  source: z.string().optional().default(""),
+  sourceBase64: z.string().min(1).optional(),
+  placeId: z.string().min(1).optional()
+});
 
 type ContractDefinition = {
   method: "GET" | "POST";
@@ -92,18 +116,8 @@ export const agentContracts = {
   refresh_script: contract("POST", "/v1/agent/refresh_script", "rbx_refresh_script", z.object({
     path: publicPathSchema
   }), [{ path: "ServerScriptService/MainScript" }], [PUBLIC_PATH_GOTCHA]),
-  update_script: contract("POST", "/v1/agent/update_script", "rbx_update_script", z.object({
-    path: publicPathSchema,
-    newSource: z.string(),
-    expectedHash: z.string().min(1),
-    placeId: z.string().min(1).optional()
-  }), [{ path: "ServerScriptService/MainScript", newSource: "print('ok')", expectedHash: "hash" }], ["`expectedHash` must come from a fresh read.", "Large write responses may omit inline source and return metadata only.", "Timeout traces identify pre-refresh, plugin-exec, and post-refresh phases.", HEAVY_OPERATION_GOTCHA], { pathType: "string", hashField: "expectedHash", recommendedMaxSyncWaitMs: "30000" }),
-  create_script: contract("POST", "/v1/agent/create_script", "rbx_create_script", z.object({
-    path: publicPathSchema,
-    className: z.enum(["Script", "LocalScript", "ModuleScript"]).default("LocalScript"),
-    source: z.string().default(""),
-    placeId: z.string().min(1).optional()
-  }), [{ path: "ReplicatedStorage/Utils/NewModule", className: "ModuleScript", source: "return {}" }], [PUBLIC_PATH_GOTCHA, "Large write responses may omit inline source and return metadata only.", "Large source payloads use a lightweight write result; request trace is the fallback if Studio is slow.", HEAVY_OPERATION_GOTCHA], { pathType: "string", recommendedMaxSyncWaitMs: "30000" }),
+  update_script: contract("POST", "/v1/agent/update_script", "rbx_update_script", updateScriptRequestSchema, [{ path: "ServerScriptService/MainScript", newSource: "print('ok')", expectedHash: "hash" }], ["`expectedHash` must come from a fresh read.", sourceFieldPairGotcha, "Large write responses may omit inline source and return metadata only.", "Timeout traces identify pre-refresh, plugin-exec, post-refresh, and timeout-reconciliation phases.", HEAVY_OPERATION_GOTCHA], { pathType: "string", hashField: "expectedHash", recommendedMaxSyncWaitMs: "30000" }),
+  create_script: contract("POST", "/v1/agent/create_script", "rbx_create_script", createScriptRequestSchema, [{ path: "ReplicatedStorage/Utils/NewModule", className: "ModuleScript", source: "return {}" }], [PUBLIC_PATH_GOTCHA, sourceFieldPairGotcha, "Large write responses may omit inline source and return metadata only.", "Large source payloads use a lightweight write result; request trace is the fallback if Studio is slow.", HEAVY_OPERATION_GOTCHA], { pathType: "string", recommendedMaxSyncWaitMs: "30000" }),
   delete_script: contract("POST", "/v1/agent/delete_script", "rbx_delete_script", z.object({
     path: publicPathSchema,
     expectedHash: z.string().min(1),
@@ -461,7 +475,9 @@ const scriptWriteShape = {
   attributes: genericUnknownRecordSchema,
   size: z.number().int().min(0).optional(),
   sourceOmitted: z.boolean().optional(),
-  sourceInlineMaxBytes: z.number().int().positive().optional()
+  sourceInlineMaxBytes: z.number().int().positive().optional(),
+  reconciledAfterTimeout: z.boolean().optional(),
+  timedOutDuringPhase: z.enum(["plugin-exec", "post-refresh"]).optional()
 } satisfies z.ZodRawShape;
 
 const scriptMetadataWriteShape = {

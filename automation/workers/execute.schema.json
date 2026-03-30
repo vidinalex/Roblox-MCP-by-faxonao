@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "outcomeStatus",
+    "changedFiles",
+    "touchedSystems",
+    "artifacts",
+    "followUpQuestions",
+    "blockedReason",
+    "recommendedState"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "outcomeStatus": {
+      "type": "string",
+      "enum": [
+        "done",
+        "review",
+        "blocked_manual",
+        "failed"
+      ]
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "touchedSystems": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "label",
+          "path"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "followUpQuestions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockedReason": {
+      "type": "string"
+    },
+    "recommendedState": {
+      "type": "string",
+      "enum": [
+        "done",
+        "review",
+        "blocked_manual",
+        "failed"
+      ]
+    }
+  }
+}

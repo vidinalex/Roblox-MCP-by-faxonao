@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "normalizedTitle",
+    "taskType",
+    "projectProfileId",
+    "placeId",
+    "requiresStudio",
+    "requiresManualVerification",
+    "requiresClarification",
+    "triageSummary",
+    "acceptanceCriteria",
+    "executorPrompt",
+    "questions",
+    "recommendedState"
+  ],
+  "properties": {
+    "normalizedTitle": {
+      "type": "string"
+    },
+    "taskType": {
+      "type": "string"
+    },
+    "projectProfileId": {
+      "type": "string"
+    },
+    "placeId": {
+      "type": "string"
+    },
+    "requiresStudio": {
+      "type": "boolean"
+    },
+    "requiresManualVerification": {
+      "type": "boolean"
+    },
+    "requiresClarification": {
+      "type": "boolean"
+    },
+    "triageSummary": {
+      "type": "string"
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "executorPrompt": {
+      "type": "string"
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommendedState": {
+      "type": "string",
+      "enum": [
+        "needs_clarification",
+        "ready_for_execution",
+        "blocked_manual"
+      ]
+    }
+  }
+}

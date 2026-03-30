@@ -5,7 +5,8 @@ export default defineConfig({
     environment: "node",
     include: [
       "server/tests/**/*.test.ts",
-      "launcher/tests/**/*.test.mjs"
+      "launcher/tests/**/*.test.mjs",
+      "automation/tests/**/*.test.mjs"
     ]
   }
 });

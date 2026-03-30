@@ -5,6 +5,7 @@ import { BridgeService } from "./bridgeService.js";
 import { buildAgentSchemaDocument, buildCapabilitiesContractSummary, getAgentContractByEndpointPath, parsePublicContractPayload } from "./agentContract.js";
 import { BridgeError } from "../lib/errors.js";
 import { serializePublicPayload, summarizeErrorShape } from "../lib/publicContract.js";
+import { resolveSourcePayload } from "../lib/sourcePayload.js";
 
 const helloSchema = z.object({
   clientId: z.string().min(1),
@@ -178,15 +179,26 @@ const agentRefreshScriptSchema = z.object({
 
 const agentUpdateScriptSchema = z.object({
   path: z.array(z.string().min(1)).min(2),
-  newSource: z.string(),
+  newSource: z.string().optional(),
+  newSourceBase64: z.string().min(1).optional(),
   expectedHash: z.string().min(1),
   placeId: z.string().min(1).optional()
+}).superRefine((payload, ctx) => {
+  if (Object.prototype.hasOwnProperty.call(payload, "newSource") || typeof payload.newSourceBase64 === "string") {
+    return;
+  }
+  ctx.addIssue({
+    code: "custom",
+    message: "Either newSource or newSourceBase64 is required",
+    path: ["newSource"]
+  });
 });
 
 const agentCreateScriptSchema = z.object({
   path: z.array(z.string().min(1)).min(2),
   className: z.enum(["Script", "LocalScript", "ModuleScript"]).default("LocalScript"),
-  source: z.string().default(""),
+  source: z.string().optional().default(""),
+  sourceBase64: z.string().min(1).optional(),
   placeId: z.string().min(1).optional()
 });
 const agentDeleteScriptSchema = z.object({
@@ -564,6 +576,18 @@ function buildStructuredInvalidRequest(detailsMessage: string, exampleValue: unk
   };
 }
 
+function decodeScriptWriteSource(body: {
+  source?: string;
+  sourceBase64?: string;
+  newSource?: string;
+  newSourceBase64?: string;
+}, mode: "create" | "update"): string {
+  if (mode === "create") {
+    return resolveSourcePayload(body.source, body.sourceBase64, "source", "sourceBase64");
+  }
+  return resolveSourcePayload(body.newSource, body.newSourceBase64, "newSource", "newSourceBase64");
+}
+
 function buildScriptWriteResponse(script: {
   path: string[];
   className: string;
@@ -574,7 +598,15 @@ function buildScriptWriteResponse(script: {
   readChannel: string;
   tags: string[];
   attributes: Record<string, unknown>;
+  reconciledAfterTimeout?: boolean;
+  timedOutDuringPhase?: "plugin-exec" | "post-refresh";
 }) {
+  const reconciliation = script.reconciledAfterTimeout === true
+    ? {
+        reconciledAfterTimeout: true,
+        timedOutDuringPhase: script.timedOutDuringPhase ?? "plugin-exec"
+      }
+    : {};
   const size = Buffer.byteLength(script.source, "utf8");
   if (size <= INLINE_WRITE_SOURCE_MAX_BYTES) {
     return {
@@ -588,7 +620,8 @@ function buildScriptWriteResponse(script: {
       tags: script.tags,
       attributes: script.attributes,
       size,
-      sourceOmitted: false
+      sourceOmitted: false,
+      ...reconciliation
     };
   }
   return {
@@ -602,13 +635,14 @@ function buildScriptWriteResponse(script: {
     attributes: script.attributes,
     size,
     sourceOmitted: true,
-    sourceInlineMaxBytes: INLINE_WRITE_SOURCE_MAX_BYTES
+    sourceInlineMaxBytes: INLINE_WRITE_SOURCE_MAX_BYTES,
+    ...reconciliation
   };
 }
 
 export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   const app = express();
-  app.use(express.json({ limit: "15mb" }));
+  app.use(express.json({ limit: "25mb" }));
 
   app.use((req, res, next) => {
     if (!req.path.startsWith("/v1/agent")) {
@@ -747,7 +781,8 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/update_script", async (req, res, next) => {
     try {
       const body = agentUpdateScriptSchema.parse(req.body ?? {});
-      const script = await bridge.updateScript(body.path, body.newSource, body.expectedHash, body.placeId, res.locals.trace);
+      const newSource = decodeScriptWriteSource(body, "update");
+      const script = await bridge.updateScript(body.path, newSource, body.expectedHash, body.placeId, res.locals.trace);
       res.json({
         ok: true,
         ...buildScriptWriteResponse(script)
@@ -760,7 +795,8 @@ export function createBridgeHttpApp(bridge: BridgeService): express.Express {
   app.post("/v1/agent/create_script", async (req, res, next) => {
     try {
       const body = agentCreateScriptSchema.parse(req.body ?? {});
-      const script = await bridge.createScript(body.path, body.className, body.source, body.placeId, resLocals(req).trace);
+      const source = decodeScriptWriteSource(body, "create");
+      const script = await bridge.createScript(body.path, body.className, source, body.placeId, resLocals(req).trace);
       res.json({
         ok: true,
         ...buildScriptWriteResponse(script)

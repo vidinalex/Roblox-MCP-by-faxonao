@@ -5,6 +5,7 @@ import { BridgeError } from "../lib/errors.js";
 import { normalizeSource, sourceHash } from "../lib/hash.js";
 import { normalizePath, pathKey } from "../lib/path.js";
 import { applyScriptPatch, diffLines, validateScriptPatchOps } from "../lib/scriptPatch.js";
+import { resolveSourcePayload } from "../lib/sourcePayload.js";
 import { CommandQueue } from "./commandQueue.js";
 import { explainBridgeError, recommendedNextStepByError } from "./errorGuidance.js";
 import { RequestTraceStore } from "./requestTraceStore.js";
@@ -59,15 +60,7 @@ function toWriteChannel(input) {
     return input === "editor" ? "editor" : null;
 }
 function decodeSource(input, inputBase64) {
-    if (typeof inputBase64 === "string" && inputBase64.length > 0) {
-        try {
-            return Buffer.from(inputBase64, "base64").toString("utf8");
-        }
-        catch {
-            throw new BridgeError("invalid_source_base64", "sourceBase64 is not valid base64", 400);
-        }
-    }
-    return typeof input === "string" ? input : "";
+    return resolveSourcePayload(input, inputBase64, "source", "sourceBase64");
 }
 function nowIso() {
     return new Date().toISOString();
@@ -109,6 +102,14 @@ function buildWriteVerificationError(path, expectedSource, actualSource) {
         expectedPreview: compactSourcePreview(expectedSource),
         currentPreview: compactSourcePreview(actualSource)
     });
+}
+function buildWriteExpectationDetails(source, className = null) {
+    return {
+        expectedHash: sourceHash(source),
+        expectedLineCount: sourceLineCount(source),
+        expectedPreview: compactSourcePreview(source),
+        expectedClassName: className
+    };
 }
 function heavyOperationPolicy() {
     return {
@@ -1198,6 +1199,70 @@ export class BridgeService {
         }
         return script;
     }
+    async reconcileScriptWriteAfterTimeout(pathInput, expectedSource, options = {}) {
+        const path = normalizePath(pathInput);
+        const trace = options.trace;
+        const stuckPhase = typeof options.stuckPhase === "string" ? options.stuckPhase : "plugin-exec";
+        trace?.startPhase("timeout-reconciliation", {
+            path: [...path],
+            commandId: options.commandId ?? null,
+            stuckPhase
+        });
+        try {
+            const verified = await this.refreshScript(path, trace);
+            const matchesSource = normalizeSource(verified.source) === normalizeSource(expectedSource);
+            const matchesClass = !options.className || verified.className === options.className;
+            if (matchesSource && matchesClass) {
+                trace?.endPhase("timeout-reconciliation", "ok", {
+                    writeState: "applied",
+                    hash: verified.hash,
+                    className: verified.className
+                });
+                return {
+                    state: "applied",
+                    script: {
+                        ...verified,
+                        reconciledAfterTimeout: true,
+                        timedOutDuringPhase: stuckPhase
+                    }
+                };
+            }
+            trace?.endPhase("timeout-reconciliation", "error", {
+                writeState: "not_applied",
+                hash: verified.hash,
+                className: verified.className
+            });
+            return {
+                state: "not_applied",
+                details: {
+                    reconciled: true,
+                    writeState: "not_applied",
+                    currentHash: verified.hash,
+                    currentClassName: verified.className,
+                    currentLineCount: sourceLineCount(verified.source),
+                    currentPreview: compactSourcePreview(verified.source)
+                }
+            };
+        }
+        catch (error) {
+            const notFound = error instanceof BridgeError && error.code === "not_found";
+            const timeout = error instanceof BridgeError && error.code === "timeout";
+            const writeState = notFound && options.allowNotFoundAsNotApplied === true ? "not_applied" : "unknown";
+            trace?.endPhase("timeout-reconciliation", "error", {
+                writeState: timeout ? "unknown" : writeState,
+                code: error instanceof BridgeError ? error.code : "internal"
+            });
+            return {
+                state: timeout ? "unknown" : writeState,
+                details: {
+                    reconciled: !timeout,
+                    writeState: timeout ? "unknown" : writeState,
+                    reconciliationErrorCode: error instanceof BridgeError ? error.code : "internal",
+                    reconciliationErrorMessage: error instanceof Error ? error.message : String(error)
+                }
+            };
+        }
+    }
     async readUiTree(pathInput, depth, options = {}) {
         await this.ensureUiCacheWarm();
         const path = normalizePath(pathInput);
@@ -1267,12 +1332,24 @@ export class BridgeService {
                 code: error instanceof BridgeError ? error.code : "internal"
             });
             if (error instanceof BridgeError && error.code === "timeout") {
+                const reconciled = await this.reconcileScriptWriteAfterTimeout(path, newSource, {
+                    trace,
+                    commandId: queued.command.commandId,
+                    stuckPhase: "plugin-exec",
+                    className: cachedBefore?.className ?? null
+                });
+                if (reconciled.state === "applied") {
+                    await this.cache.recordChangedItems("script", "script_write", [{ path: reconciled.script.path, updatedAt: reconciled.script.updatedAt }]);
+                    return reconciled.script;
+                }
                 throw new BridgeError("timeout", error.message, error.status, {
                     ...(error.details && typeof error.details === "object" ? error.details : {}),
                     requestId: trace?.requestId ?? null,
                     lastCompletedPhase: "queue-write",
                     stuckPhase: "plugin-exec",
-                    commandId: queued.command.commandId
+                    commandId: queued.command.commandId,
+                    ...buildWriteExpectationDetails(newSource, cachedBefore?.className ?? null),
+                    ...(reconciled.details ?? {})
                 });
             }
             throw error;
@@ -1304,11 +1381,24 @@ export class BridgeService {
             catch (error) {
                 trace?.endPhase("post-refresh", "error");
                 if (error instanceof BridgeError && error.code === "timeout") {
+                    const reconciled = await this.reconcileScriptWriteAfterTimeout(updated.path, newSource, {
+                        trace,
+                        commandId: queued.command.commandId,
+                        stuckPhase: "post-refresh",
+                        className: updated.className ?? cachedBefore?.className ?? null
+                    });
+                    if (reconciled.state === "applied") {
+                        await this.cache.recordChangedItems("script", "script_write", [{ path: reconciled.script.path, updatedAt: reconciled.script.updatedAt }]);
+                        return reconciled.script;
+                    }
                     throw new BridgeError("timeout", error.message, error.status, {
                         ...(error.details && typeof error.details === "object" ? error.details : {}),
                         requestId: trace?.requestId ?? null,
                         lastCompletedPhase: "plugin-exec",
-                        stuckPhase: "post-refresh"
+                        stuckPhase: "post-refresh",
+                        commandId: queued.command.commandId,
+                        ...buildWriteExpectationDetails(newSource, updated.className ?? cachedBefore?.className ?? null),
+                        ...(reconciled.details ?? {})
                     });
                 }
                 throw error;
@@ -1495,12 +1585,25 @@ export class BridgeService {
                 code: error instanceof BridgeError ? error.code : "internal"
             });
             if (error instanceof BridgeError && error.code === "timeout") {
+                const reconciled = await this.reconcileScriptWriteAfterTimeout(path, source, {
+                    trace,
+                    commandId: queued.command.commandId,
+                    stuckPhase: "plugin-exec",
+                    className,
+                    allowNotFoundAsNotApplied: true
+                });
+                if (reconciled.state === "applied") {
+                    await this.cache.recordChangedItems("script", "script_write", [{ path: reconciled.script.path, updatedAt: reconciled.script.updatedAt }]);
+                    return reconciled.script;
+                }
                 throw new BridgeError("timeout", error.message, error.status, {
                     ...(error.details && typeof error.details === "object" ? error.details : {}),
                     requestId: trace?.requestId ?? null,
                     lastCompletedPhase: "queue-write",
                     stuckPhase: "plugin-exec",
-                    commandId: queued.command.commandId
+                    commandId: queued.command.commandId,
+                    ...buildWriteExpectationDetails(source, className),
+                    ...(reconciled.details ?? {})
                 });
             }
             throw error;
@@ -1532,11 +1635,25 @@ export class BridgeService {
             catch (error) {
                 trace?.endPhase("post-refresh", "error");
                 if (error instanceof BridgeError && error.code === "timeout") {
+                    const reconciled = await this.reconcileScriptWriteAfterTimeout(created.path, source, {
+                        trace,
+                        commandId: queued.command.commandId,
+                        stuckPhase: "post-refresh",
+                        className,
+                        allowNotFoundAsNotApplied: true
+                    });
+                    if (reconciled.state === "applied") {
+                        await this.cache.recordChangedItems("script", "script_write", [{ path: reconciled.script.path, updatedAt: reconciled.script.updatedAt }]);
+                        return reconciled.script;
+                    }
                     throw new BridgeError("timeout", error.message, error.status, {
                         ...(error.details && typeof error.details === "object" ? error.details : {}),
                         requestId: trace?.requestId ?? null,
                         lastCompletedPhase: "plugin-exec",
-                        stuckPhase: "post-refresh"
+                        stuckPhase: "post-refresh",
+                        commandId: queued.command.commandId,
+                        ...buildWriteExpectationDetails(source, className),
+                        ...(reconciled.details ?? {})
                     });
                 }
                 throw error;

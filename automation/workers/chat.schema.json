@@ -1,0 +1,150 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "responseMode",
+    "assistantMessage",
+    "finish",
+    "toolCalls",
+    "taskMutation",
+    "executionProposal"
+  ],
+  "properties": {
+    "responseMode": {
+      "type": "string",
+      "enum": [
+        "chat_answer",
+        "task_suggestions",
+        "clarification",
+        "status_report",
+        "execution_proposal",
+        "execution_started",
+        "blocked_manual"
+      ]
+    },
+    "assistantMessage": {
+      "type": "string"
+    },
+    "finish": {
+      "type": "boolean"
+    },
+    "toolCalls": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tool",
+          "argumentsJson"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "argumentsJson": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "taskMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "taskId",
+        "title",
+        "description",
+        "intentType",
+        "visibility",
+        "projectProfileId",
+        "placeId",
+        "taskType",
+        "lastUserGoal"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "none",
+            "create",
+            "update"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "intentType": {
+          "type": "string"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "hidden",
+            "normal",
+            "execution"
+          ]
+        },
+        "projectProfileId": {
+          "type": "string"
+        },
+        "placeId": {
+          "type": "string"
+        },
+        "taskType": {
+          "type": "string"
+        },
+        "lastUserGoal": {
+          "type": "string"
+        }
+      }
+    },
+    "executionProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "taskId",
+        "linearIdentifier",
+        "summary",
+        "projectProfileId",
+        "candidateTaskIds"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "none",
+            "task",
+            "linear_issue"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "linearIdentifier": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "projectProfileId": {
+          "type": "string"
+        },
+        "candidateTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

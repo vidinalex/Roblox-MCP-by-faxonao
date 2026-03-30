@@ -4,6 +4,7 @@
   --panel: rgba(18, 25, 40, 0.92);
   --panel-soft: rgba(27, 35, 56, 0.86);
   --card-strong: #26324e;
+  --card-soft: rgba(255, 255, 255, 0.05);
   --accent: #ff9a3c;
   --accent-soft: #ffbc74;
   --green: #68d7a0;
@@ -44,8 +45,7 @@ body {
 
 .topbar,
 .panel,
-.profile-card,
-.profile-row {
+.profile-card {
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
@@ -61,14 +61,29 @@ body {
   backdrop-filter: blur(10px);
 }
 
-.brand { display: flex; align-items: center; gap: 16px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
 
 .brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  background: conic-gradient(from 90deg, var(--accent), #ffcf8f, #e46c40, var(--accent));
-  box-shadow: inset 0 0 24px rgba(255, 255, 255, 0.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(255, 154, 60, 0.18), rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--accent-soft);
+  box-shadow: inset 0 0 24px rgba(255, 255, 255, 0.08);
+}
+
+.brand-mark svg {
+  width: 22px;
+  height: 22px;
 }
 
 h1, h2, h3, p { margin: 0; }
@@ -76,19 +91,23 @@ h1, h2, h3, p { margin: 0; }
 .brand p,
 .panel-header p,
 .section-header p,
-.meta-line,
-.status-note,
+.meta-label,
+.status-copy,
 .form-message { color: var(--muted); }
 
 .topbar-actions,
-.card-actions,
-.row-actions,
 .form-actions,
 .logs-toolbar {
   display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.card-action-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 button,
@@ -99,7 +118,7 @@ button {
   border-radius: 12px;
   padding: 10px 14px;
   cursor: pointer;
-  transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease;
+  transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
 }
 
 button:hover { transform: translateY(-1px); }
@@ -107,6 +126,10 @@ button:hover { transform: translateY(-1px); }
 button.primary { background: var(--accent); color: #201205; font-weight: 700; }
 button.secondary { background: var(--card-strong); color: var(--text); }
 button.ghost { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+button.ghost.danger {
+  background: rgba(255, 122, 122, 0.12);
+  color: #ffd0d0;
+}
 button:disabled { opacity: 0.5; cursor: default; transform: none; }
 button.is-busy {
   position: relative;
@@ -133,61 +156,227 @@ button.is-busy::after {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1.65fr) minmax(340px, 0.95fr);
   gap: 14px;
   margin-top: 14px;
 }
 
 .workspace,
-.sidebar { display: flex; flex-direction: column; gap: 16px; }
-
-.primary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.profile-list { display: flex; flex-direction: column; gap: 12px; }
-
-.profile-card,
-.profile-row,
-.panel { background: var(--panel); border-radius: 16px; }
-
-.profile-card {
-  padding: 16px;
-  min-height: 242px;
+.sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  min-width: 0;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(295px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.profile-card,
+.panel {
+  background: var(--panel);
+  border-radius: 16px;
+}
+
+.profile-card {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 14px;
+  min-height: 300px;
+  padding: 16px;
   background:
     linear-gradient(160deg, rgba(255, 255, 255, 0.04), transparent 38%),
     linear-gradient(160deg, rgba(255, 154, 60, 0.08), transparent 64%),
     var(--panel);
 }
 
-.profile-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  padding: 14px;
-  align-items: center;
+.profile-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.profile-title-row,
+.profile-title-stack {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .profile-badges {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-title {
+  font-size: 1.2rem;
+  line-height: 1.1;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.profile-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.meta-card {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--card-soft);
+  min-width: 0;
+}
+
+.meta-card.wide {
+  grid-column: 1 / -1;
+}
+
+.meta-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.meta-value {
+  font-size: 1rem;
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.meta-value.compact {
+  font-size: 0.92rem;
+}
+
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.status-strip {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(9, 13, 22, 0.4);
+}
+
+.status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status-kicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.status-copy {
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.card-footer {
+  display: grid;
+  gap: 12px;
+  align-content: end;
+}
+
+.card-action-group > button {
+  width: 100%;
+}
+
+.card-footer-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.profile-title { font-size: 1.12rem; font-weight: 700; }
-.meta-block { display: grid; gap: 6px; }
-.meta-line strong { color: var(--text); }
+.runtime-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 178px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.runtime-toggle.is-on {
+  background: rgba(104, 215, 160, 0.12);
+  border-color: rgba(104, 215, 160, 0.25);
+}
+
+.toggle-track {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background 0.14s ease;
+  flex: 0 0 auto;
+}
+
+.runtime-toggle.is-on .toggle-track {
+  background: rgba(104, 215, 160, 0.72);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  transition: transform 0.14s ease;
+}
+
+.runtime-toggle.is-on .toggle-thumb {
+  transform: translateX(20px);
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.toggle-copy strong {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.toggle-copy span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .panel { padding: 16px; }
 .panel-header,
 .section-header { display: flex; flex-direction: column; gap: 4px; }
-.section-header.compact { margin-top: 4px; }
 
 .profile-form { display: flex; flex-direction: column; gap: 14px; }
 
@@ -250,5 +439,26 @@ button.is-busy::after {
 
 @media (max-width: 1180px) {
   .layout { grid-template-columns: 1fr; }
-  .primary-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 780px) {
+  .shell { padding: 12px; }
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .card-footer-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .card-action-group,
+  .topbar-actions,
+  .form-actions { width: 100%; }
+  .card-action-group > button,
+  .topbar-actions > button,
+  .form-actions > button,
+  .runtime-toggle { width: 100%; justify-content: center; }
+  .split,
+  .profile-meta-grid { grid-template-columns: 1fr; }
+  .meta-card.wide { grid-column: auto; }
 }
